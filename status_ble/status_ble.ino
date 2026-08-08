@@ -37,7 +37,13 @@
 #define MATRIX_W    8
 #define MATRIX_H    8
 
-#define BRIGHTNESS  15
+/*
+ * Walked down 15 -> 8 -> 4. These panels are fierce at desk distance: bright
+ * pixels bloom into their neighbours and the shape turns into a glowing blob,
+ * so less brightness genuinely reads BETTER close up. 4 is not a typo. Drop to
+ * 2 if it still dazzles.
+ */
+#define BRIGHTNESS  4
 #define MAX_MILLIAMPS 300
 
 #define DEVICE_NAME "glowgrid"
@@ -110,29 +116,75 @@ void drawGlyph(const uint8_t glyph[MATRIX_H], CRGB colour) {
 // Status artwork
 // ---------------------------------------------------------------------------
 
+/*
+ * Full-bleed icons: a single coloured symbol on black, using the whole 8x8.
+ *
+ * This replaced two earlier attempts, and the progression is worth recording:
+ *
+ *   1. thin strokes on black      - too small and faint to read
+ *   2. coloured disc, white symbol - bright, but the fill drowned the symbol
+ *   3. white disc, coloured symbol - same problem, and both states just looked
+ *                                    like a white blob from any distance
+ *   4. big symbol, no fill        - what we have now
+ *
+ * The lesson: at 8x8 the SHAPE has to be the icon. A background fill wastes
+ * most of the 64 pixels on something carrying no information, and drags the
+ * eye away from the few pixels that matter.
+ *
+ * Strokes are 2 pixels thick wherever possible, because single-pixel lines
+ * disappear at a glance. Every glyph touches all four edges.
+ */
+
+// Bold check mark, corner to corner.
 const uint8_t GLYPH_TICK[MATRIX_H] = {
-  0b00000000, 0b00000001, 0b00000010, 0b00000100,
-  0b10001000, 0b01010000, 0b00100000, 0b00000000,
+  0b00000001,
+  0b00000011,
+  0b00000110,
+  0b10001100,
+  0b11011000,
+  0b01110000,
+  0b00110000,
+  0b00100000,
 };
 
-const uint8_t GLYPH_BAR[MATRIX_H] = {
-  0b00000000, 0b00000000, 0b00000000, 0b11111111,
-  0b11111111, 0b00000000, 0b00000000, 0b00000000,
+// Symmetrical X, corner to corner. Tick and cross are the classic opposing
+// pair, so they stay distinguishable even when you only catch a glimpse.
+const uint8_t GLYPH_CROSS[MATRIX_H] = {
+  0b11000011,
+  0b01100110,
+  0b00111100,
+  0b00011000,
+  0b00011000,
+  0b00111100,
+  0b01100110,
+  0b11000011,
 };
 
-const uint8_t GLYPH_SCREEN[MATRIX_H] = {
-  0b00000000, 0b01111110, 0b01000010, 0b01000010,
-  0b01000010, 0b01111110, 0b00011000, 0b00111100,
+// A monitor with a stand: on a call / in a meeting.
+const uint8_t GLYPH_MONITOR[MATRIX_H] = {
+  0b11111111,
+  0b10000001,
+  0b10000001,
+  0b10000001,
+  0b11111111,
+  0b00011000,
+  0b00011000,
+  0b01111110,
 };
 
 /*
- * A 'Z' for away. This replaced a clock face, which was unreadable: a circle
- * with hands inside it needs more than the 6x6 pixels available, so it just
- * looked like an orange blob. A letter fills the grid and reads instantly.
+ * A 'Z' for away, now edge to edge. This originally replaced a clock face,
+ * which was hopeless: a circle with hands needs more pixels than we have.
  */
 const uint8_t GLYPH_Z[MATRIX_H] = {
-  0b00000000, 0b01111110, 0b00000100, 0b00001000,
-  0b00010000, 0b00100000, 0b01111110, 0b00000000,
+  0b11111111,
+  0b00000110,
+  0b00001100,
+  0b00011000,
+  0b00110000,
+  0b01100000,
+  0b11000000,
+  0b11111111,
 };
 
 const char* statusName(Presence s) {
@@ -168,21 +220,23 @@ void renderStatus() {
   FastLED.clear();
 
   switch (currentStatus) {
-    case STATUS_AVAILABLE: drawGlyph(GLYPH_TICK,   CRGB::Green);  break;
-    case STATUS_BUSY:      drawGlyph(GLYPH_BAR,    CRGB::Red);    break;
-    case STATUS_MEETING:   drawGlyph(GLYPH_SCREEN, CRGB::Purple); break;
-    case STATUS_AWAY:      drawGlyph(GLYPH_Z,      CRGB::Orange); break;
+    case STATUS_AVAILABLE: drawGlyph(GLYPH_TICK,    CRGB::Green);  break;
+    case STATUS_BUSY:      drawGlyph(GLYPH_CROSS,   CRGB::Red);    break;
+    case STATUS_MEETING:   drawGlyph(GLYPH_MONITOR, CRGB::Purple); break;
+    case STATUS_AWAY:      drawGlyph(GLYPH_Z,       CRGB::Orange); break;
     case STATUS_OFF:
     default:
       break;
   }
 
   /*
-   * Connection indicator: a dim blue dot in the bottom-right corner while
-   * nothing is connected. Without this, "no client" and "status off" look
-   * identical, which makes debugging the Mac side much harder.
+   * Connection indicator: a dim blue dot in the bottom-right corner, shown
+   * only when the panel would otherwise be blank. It still does its original
+   * job of distinguishing "nothing connected" from "deliberately off", but now
+   * that the glyphs run edge to edge it would otherwise punch a hole in the
+   * corner of every icon.
    */
-  if (!clientConnected) {
+  if (!clientConnected && currentStatus == STATUS_OFF) {
     setPixel(MATRIX_W - 1, MATRIX_H - 1, CRGB(0, 0, 30));
   }
 

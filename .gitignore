@@ -1,4 +1,8 @@
 build/
+
+# Compiled Swift helper. Rebuild with:
+#   cd mac-cli && swiftc -O media-sensor/media_sensor.swift -o bin/media-sensor
+mac-cli/bin/
 *.bin
 *.elf
 *.map
