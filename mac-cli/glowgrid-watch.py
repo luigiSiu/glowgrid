@@ -2,8 +2,17 @@
 """
 glowgrid-watch - drive the panel automatically from camera/microphone usage.
 
+SUPERSEDED BY THE MENU BAR APP. Glowgrid.app does the same detection with a
+persistent BLE connection, so a status change is instant instead of costing a
+full connect-write-disconnect cycle, and it can consult your calendar as well.
+Do not run both: they will fight over the panel.
+
+This is kept for headless use, for anyone who wants automatic status without
+installing an app, and because it is the clearest statement of the detection
+rules in one file. It is not being extended.
+
     camera in use            -> meeting   (purple monitor)
-    mic in use, no camera    -> busy      (red bar)
+    mic in use, no camera    -> busy      (red cross)
     neither                  -> available (green tick)
 
 Usage:

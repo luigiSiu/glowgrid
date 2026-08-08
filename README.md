@@ -1,352 +1,482 @@
 # glowgrid
 
-Driving an LED matrix from an ESP32-WROOM-32 dev board (CH340 USB, 5V in / 3.3V logic).
+An 8×8 LED panel that sits on your desk and shows whether you can be
+interrupted. It follows your Mac automatically — camera on means you are in a
+meeting, microphone on means you are busy — and you can override it from the
+menu bar at any time.
 
-## Hardware, confirmed
+<!-- Add docs/photos/hero.jpg and uncomment:
+![glowgrid on a desk, showing a green tick](docs/photos/hero.jpg)
+-->
 
-- **Board**: ESP32-D0WD-V3 rev v3.1, dual core, Wi-Fi + BT. MAC `b0:cb:d8:c1:84:90`.
-  Port on this Mac: `/dev/cu.usbserial-110`.
-- **Panel**: BTF-LIGHTING WS2812B ECO, **8x8 = 64 pixels**, 8x8 cm flexible FPCB, DC5V.
-  Colour order is **GRB, not RGB**. Serpentine chain layout. Max ~19.2 W (~3.8 A) all white.
+Built from about €15 of parts in an evening, with no soldering and no Xcode.
 
-### IMPORTANT: upload speed
+## What it shows
 
-This board's CH340 clone cannot handle the default 921600 baud - the upload connects,
-reads the chip ID, then dies with "Unable to verify flash chip connection". Always
-upload at 115200:
+| Status | Icon | Colour |
+|---|---|---|
+| Available | tick | green |
+| Busy | cross | red |
+| In a meeting | monitor | purple |
+| Away | Z | orange |
+| Off | nothing | — |
 
-```sh
-arduino-cli compile --upload -p /dev/cu.usbserial-110 \
-  --fqbn "esp32:esp32:esp32:UploadSpeed=115200" <sketch_dir>
-```
+<!-- Add docs/photos/panel-states.jpg and uncomment:
+![the four icons](docs/photos/panel-states.jpg)
+-->
 
-In the Arduino IDE GUI: Tools > Upload Speed > 115200.
+Icons animate in from the centre, then breathe gently so the panel looks alive
+rather than merely switched on. It can also scroll a short message.
 
-### The port name changes
+## What you need
 
-macOS names the port after the physical USB socket, so it moves if you replug into a
-different one - it has been both `/dev/cu.usbserial-110` and `/dev/cu.usbserial-10`.
-If an upload fails with "port is busy or doesn't exist", check the current name first:
+**Hardware**
 
-```sh
-arduino-cli board list
-```
+- An **ESP32 dev board**. This project was built with an ESP32-WROOM-32
+  (ESP32-D0WD-V3) with a CH340 USB chip — the ubiquitous ~€6 clone. Any ESP32
+  with Bluetooth will do.
+- A **WS2812B 8×8 LED matrix** (also sold as NeoPixel). This build used a
+  BTF-LIGHTING WS2812B ECO 8×8, 8×8 cm flexible board. Roughly €8.
+- **3 female-to-female dupont jumper leads**.
+- A **USB data cable** for the ESP32. Charge-only cables will not work and give
+  no useful error — the port simply never appears.
 
-## Project layout
+**Software** — a Mac running macOS 13 or later, and Xcode Command Line Tools
+(`xcode-select --install`) for the Swift compiler.
 
-```
-blink_test/        step 0  onboard LED only, no wiring
-matrix_test/       step 1  first light on the panel
-xy_calibrate/      step 2a discover the physical layout
-xy_test/           step 2b validate the XY() mapper
-status_display/    step 3  the five states on a timer, no Bluetooth
-status_ble/        step 4  BLE-driven  <-- the one that runs on the board
+That is the whole bill of materials. No soldering, no breadboard, no resistors.
 
-mac-cli/
-  glowgrid.py             set a status over BLE      (Python + bleak, via uv)
-  glowgrid-watch.py       camera/mic watcher         (Python, stdlib only)
-  media-sensor/*.swift    camera/mic detector source (compiles to bin/media-sensor)
-  bin/media-sensor        the compiled detector
-```
+## Read this before wiring
 
-The numbered sketches are **frozen snapshots of each step**, not living code. They are
-kept so any layer can be reflashed in isolation when something breaks. Only `status_ble`
-is maintained; the others intentionally lag behind.
+`VIN` on the ESP32 is passed straight through from the USB 5 V rail, and USB
+gives you about 500 mA. A single WS2812 LED can draw 60 mA at full white, so a
+64-pixel panel at full white wants **around 3.8 A** — roughly eight times what
+USB can supply.
 
-Two symlinks in `~/.local/bin` make the tools global:
+That is fine here, because this project **never runs the panel bright**. The
+firmware defaults to brightness 6 out of 255, caps it at 60, and tells FastLED
+to keep total draw under 300 mA. At those levels a handful of lit pixels draws
+tens of milliamps and USB power is comfortable.
 
-```
-glowgrid       -> mac-cli/glowgrid.py
-glowgrid-watch -> mac-cli/glowgrid-watch.py
-```
+Two rules follow:
 
-Because they are symlinks and not copies, editing the repo updates the commands at once.
+- **Do not raise the brightness cap** unless you power the panel from a
+  separate 5 V supply.
+- If you do use an external supply, connect only `GND` and the data line to the
+  ESP32, and make sure the grounds are common. **Never feed `VIN` from an
+  external supply while USB is also plugged in.**
 
-## Sketches
+Low brightness is not just a power workaround, incidentally. These panels bloom
+badly at desk distance and the icons read *better* dim than bright.
 
-Each is a step that was verified before moving on, so any of them can be reflashed to
-isolate a problem later.
+## Build it
 
-- `blink_test/` - step 0, blinks the onboard LED only. No wiring needed. Proves board+cable.
-- `matrix_test/` - step 1, first light on the panel. Power-limited, safe on USB.
-- `xy_calibrate/` - step 2a, reveals the physical layout (which corner is index 0, row
-  direction, serpentine or not).
-- `xy_test/` - step 2b, validates the `XY()` mapper with a letter F, a top row, a left
-  column and an origin pixel.
-- `status_display/` - step 3, the five availability states on a timer. No Bluetooth.
-- `status_ble/` - step 4, the same display driven over BLE. **This is the current one.**
-
-## Measured panel layout
-
-Determined empirically in step 2, not assumed:
-
-- chain index 0 is the **bottom-left** corner
-- the chain runs in **horizontal rows of 8**
-- the bottom row runs **left to right**, and each row above reverses (**serpentine**)
-
-`XY(x, y)` exposes a normal screen coordinate system on top of that - origin top-left,
-x right, y down - by flipping vertically and undoing the serpentine. Everything above
-that layer can pretend the panel is an ordinary grid.
-
-## BLE interface
-
-```
-device name  glowgrid
-service      6E400001-B5A3-F393-E0A9-E50E24DCCA9E
-RX (write)   6E400002-B5A3-F393-E0A9-E50E24DCCA9E
-```
-
-Write one of `available`, `busy`, `meeting`, `away`, `off` as plain ASCII. Digits `0`-`4`
-work too. Those are the Nordic UART Service UUIDs, chosen so generic BLE apps recognise
-the device for testing.
-
-A dim blue dot in the bottom-right corner means no client is connected. That indicator
-exists so "nothing connected" and "status off" are not visually identical.
-
-## Mac CLI
+### 1. Install the toolchain
 
 ```sh
-cd mac-cli
-./glowgrid.py available
-./glowgrid.py busy
-./glowgrid.py --scan      # list nearby BLE devices
-./glowgrid.py --forget    # clear the cached device address
+brew install arduino-cli
+
+arduino-cli config init
+arduino-cli config add board_manager.additional_urls \
+  https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core update-index
+arduino-cli core install esp32:esp32
+arduino-cli lib install FastLED
 ```
 
-The script carries PEP 723 inline dependency metadata, so `uv` builds its environment on
-the fly - nothing to install, no venv to activate. The device address is cached in
-`~/.cache/glowgrid/address`, which cuts a status change from ~8s to ~1.5s; it falls back
-to scanning automatically if the cached address stops working.
+Note the board index URL. Many guides still list
+`dl.espressif.com/dl/package_esp32_index.json`, which is the old one.
 
-**macOS needs Bluetooth permission** for the terminal app (System Settings > Privacy &
-Security > Bluetooth). Without it the process dies with `SIGABRT` and no useful message.
+If you prefer the Arduino IDE, it shares `~/Library/Arduino15` with
+`arduino-cli`, so configuring either configures both.
 
-Note: macOS deliberately does not support classic Bluetooth serial (SPP), which is why
-this is BLE. It also hides hardware MAC addresses, so the "address" is a CoreBluetooth
-UUID that is stable per machine but differs on another Mac.
-
-### Installed commands
-
-Both are symlinks into `~/.local/bin`, which is already on PATH:
+### 2. Prove the board works, before wiring anything
 
 ```sh
-glowgrid busy         # set a status from anywhere
-glowgrid-watch        # run the automatic watcher
+./flash.sh blink_test -m
 ```
 
-## Automatic status detection
+`flash.sh` finds the serial port and pins the upload speed for you. The onboard
+LED should blink once per second and the monitor should print `on` / `off`.
 
-`glowgrid-watch` polls the camera and microphone and maps them to a status:
+Do this first. If something is wrong with the board, the cable or the driver,
+you want to find out now rather than while also suspecting your wiring.
 
-- camera in use -> `meeting`
-- mic in use, no camera -> `busy`
-- neither -> `available`
-
-```sh
-glowgrid-watch                 # foreground
-glowgrid-watch --dry-run       # decide but never touch the panel
-glowgrid-watch --interval 5    # seconds between samples (default 3)
-glowgrid-watch --on-exit off   # what to leave on the panel on Ctrl+C
-```
-
-It only sends on a *change* of state, and requires a new state to be seen twice before
-acting. Both matter: re-sending constantly would thrash the BLE link, and mic state
-briefly blips when apps probe the device, which made the panel flap colours.
-
-### How detection works, and why not the easy way
-
-`mac-cli/media-sensor/media_sensor.swift` compiles to a small binary that queries:
-
-- `kAudioDevicePropertyDeviceIsRunningSomewhere` (CoreAudio) for the microphone
-- `kCMIODevicePropertyDeviceIsRunningSomewhere` (CoreMediaIO) for the camera
-
-These are the supported "is this device running for anybody" properties. Two tempting
-alternatives were rejected: scraping `log stream` relies on private subsystem names that
-change between macOS releases, and looking for processes named zoom/teams only proves the
-app is open, not that it is capturing.
-
-It needs **no camera or microphone permission**, because it never touches media - it only
-asks about device state. So no TCC prompt for this binary.
-
-Output-only audio devices are skipped explicitly, otherwise playing music would register
-as microphone activity and show you as busy.
-
-Rebuild after editing:
-
-```sh
-cd mac-cli
-swiftc -O media-sensor/media_sensor.swift -o bin/media-sensor
-```
-
-Verified: camera flips 0 -> 1 -> 0 around opening and closing Photo Booth, and microphone
-detection confirmed on a real call. Both paths work.
-
-## Powering from a USB battery
-
-The plan is to keep the current wiring (panel on `VIN`) and run the whole thing from a
-USB-C power bank. That works, with one caveat worth knowing before you buy anything.
-
-- **Current is not the problem.** ESP32 with BLE averages ~80-150 mA, and the panel at
-  `BRIGHTNESS 15` with a glyph lit is only tens of mA. Any power bank supplies that
-  easily - more headroom than you have now.
-- **The real risk is auto-shutoff.** Many power banks switch themselves off when draw
-  falls below roughly 50-100 mA, because they assume nothing is plugged in. Our load sits
-  near that threshold, so some banks will cut out after a few minutes. Look for one
-  advertising a low-current, trickle or "small device" mode. This is the single thing
-  that decides whether the idea works.
-- **Runtime is fine.** A 10,000 mAh bank yields roughly 6,000-7,000 mAh usable after
-  conversion losses, so at ~150 mA you get well over a day.
-- **Trade-off:** on battery there is no serial console, and reflashing means going back
-  to the Mac. Do not feed `VIN` from an external supply while USB is also connected.
-
-If a bank does cut out on you, raising `BRIGHTNESS` is the crude fix - it increases draw
-above the cutoff and looks better anyway.
-
-## Gotchas already paid for
-
-- **Upload speed.** The CH340 clone fails at the default 921600. Always 115200.
-- **`arduino-cli upload` does not compile.** Use `arduino-cli compile --upload`.
-- **Arduino injects function prototypes** above the first function definition, so any
-  `enum` used in a function signature must be declared before that point.
-- **Do not name an enum `Status`** in a sketch that uses BLE. `BLECharacteristicCallbacks`
-  has a nested `Status`, which shadows yours inside derived classes and produces a very
-  confusing error. Ours is called `Presence`.
-- **The serial monitor is not a reliable liveness check.** With BLE running, output can
-  freeze at the bootloader `configsip:` line while the sketch is in fact running
-  perfectly. Trust an observable side effect (the blue dot, or a BLE scan) instead. This
-  cost real time chasing an imaginary boot failure.
-- **`status_ble` is at 93% of the default app partition.** Adding much more code will
-  need `PartitionScheme=huge_app`, and after changing partition scheme you should
-  `erase_flash` before reflashing.
-
-## Status: software side is DONE
-
-Already installed and verified on this Mac:
-
-- `arduino-cli` 1.5.1 + Arduino IDE 2 (they share `~/Library/Arduino15`, so configuring
-  one configures both)
-- Espressif board index registered in `~/Library/Arduino15/arduino-cli.yaml`
-- `esp32:esp32@3.3.11` core installed -> "ESP32 Dev Module" is selectable
-- `FastLED@3.10.5` library installed
-- `glowgrid.ino` compiles for `esp32:esp32:esp32`
-
-Note: the board index URL in the manual (`dl.espressif.com/dl/package_esp32_index.json`)
-is the old one. We used the current canonical URL:
-`https://espressif.github.io/arduino-esp32/package_esp32_index.json`
-
-## Step 0 - prove the board works (do this first, no wiring)
-
-Plug the ESP32 into USB with a **data** cable (not a charge-only cable), then:
-
-```sh
-# 1. find the port - look for something like /dev/cu.usbserial-XXXX or /dev/cu.wchusbserialXXXX
-arduino-cli board list
-
-# 2. upload (replace the port with what you saw above)
-arduino-cli upload -p /dev/cu.usbserial-0001 --fqbn esp32:esp32:esp32 .
-
-# 3. watch the serial output
-arduino-cli monitor -p /dev/cu.usbserial-0001 -c baudrate=115200
-```
-
-The small LED on the board should blink once per second and you should see
-`on` / `off` in the monitor.
-
-### If the port does not show up
-
-That is the CH340 driver issue the manual mentions. macOS has a built-in CH34x driver,
-but many cheap clones need the vendor one:
+**No port found?** Almost always the cable — try a known data cable before
+anything else. Failing that, install the CH340 driver:
 
 ```sh
 brew install --cask wch-ch34x-usb-serial-driver
 ```
 
-Then reboot and allow the kernel extension in System Settings > Privacy & Security.
+then reboot and allow the kernel extension in System Settings › Privacy &
+Security.
 
-### If upload hangs at "Connecting........"
+**Upload hangs at `Connecting........`?** Hold the **BOOT** button as the
+upload starts and release once it begins writing. Some clones do not auto-reset.
 
-Hold the **BOOT** button on the board while the upload starts, release once it begins
-writing. Some clones do not auto-reset.
+### 3. Wire the panel
 
-## Step 1 - wiring the matrix (only after step 0 passes)
+Unplug USB first.
 
-Unplug USB before touching any wires.
+| ESP32 pin | Wire  | Panel |
+|---|---|---|
+| `VIN` | red | `5V` |
+| `GND` | white | `GND` |
+| `D13` | green | `DIN` |
 
-| ESP32 pin | Wire     | Matrix pin |
-|-----------|----------|------------|
-| `VIN`     | power    | `5V` / `VCC` |
-| `GND`     | ground   | `GND`      |
-| `D13`     | data     | `DIN`      |
+`D13` on the silkscreen is `GPIO13`, which is what the firmware uses.
 
-`GPIO13` is the data pin in code (`D13` silkscreen == `GPIO13`).
+<!-- Add docs/photos/wiring.jpg and uncomment:
+![the three leads in VIN, GND and D13](docs/photos/wiring.jpg)
+-->
 
-### Identifying the three wire sets on the back of the panel
+**The panel has three sets of wires and only one is the input.** Getting this
+wrong is the most common way to end up with a dead-looking panel:
 
-The panel has three sets of wires. Only one is the input:
+1. Arrow pointing one way, labelled `5V`/`GND`/`DOUT`, male connector — the
+   **output**, for chaining a second panel. Not used.
+2. Two bare `5V`/`GND` wires with no connector — power injection, for an
+   external supply. Not used here.
+3. Arrow pointing the other way, labelled `5V`/`GND`/`DIN`, female connector —
+   the **input. This is the one.**
 
-1. **Arrow one way, `5V`/`GND`/`DOUT`, male connector** - the OUTPUT, for chaining a
-   second panel. **Not used.**
-2. **Two bare `5V`/`GND` wires, no connector** - power injection, for an external 5V
-   supply. Use these later when you want real brightness.
-3. **Arrow the other way, `5V`/`GND`/`DIN`, female connector** - the **INPUT. Use this.**
+The rule: data goes *in* at `DIN`; `DOUT` is an exit. The arrows point opposite
+ways because the LED chain snakes back and forth row by row.
 
-The rule: data goes IN at `DIN`. `DOUT` is an exit. The arrows point opposite ways
-because the LED chain snakes back and forth row by row (serpentine) - which also means
-row 1 runs left-to-right, row 2 right-to-left, and so on. That matters once we start
-drawing images rather than lighting single pixels.
+<!-- Add docs/photos/connectors.jpg and uncomment:
+![the three wire sets on the back of the panel](docs/photos/connectors.jpg)
+-->
 
-### Confirmed wire colours (verified by tracing, not assumed)
+Colours on the JST pigtail were verified by tracing on this build: red = 5 V,
+white = GND, green = DIN. Adapter colours are not guaranteed in general, so
+check yours by slot position or with a continuity test rather than trusting
+the colour alone.
 
-The JST pigtail adapter is straight-through, so colours hold on both sides:
+When you hold two mated connectors face to face, the colour order *looks*
+reversed. That is a mirror effect, not a fault.
 
-- **red = 5V** -> ESP32 `VIN`
-- **white = GND** -> ESP32 `GND`
-- **green = DIN** -> ESP32 `D13` (GPIO13)
+The bare wire ends push into the dupont sockets as a friction fit, so twist
+each end tightly and keep the three joints apart. Intermittent data shows up as
+flicker or wrong colours; intermittent power shows up as the panel resetting.
+Suspect these joints first. Tinning the ends with solder makes them far more
+reliable if you have an iron.
 
-Note: when you hold two mated connectors face to face the colour order *looks* reversed.
-That is a mirror effect, not a real swap. Adapter colours are not guaranteed in general -
-verify by slot position or with a continuity test before trusting them on any new part.
-
-### Bare wire ends into dupont sockets
-
-The adapter ends in bare copper, joined to female-female dupont leads. That is a loose
-friction fit, so:
-
-- Twist each bare end tightly before inserting, and push it fully in.
-- Keep the three bare joints physically apart so they cannot touch each other.
-- Intermittent contact on the data line shows up as flicker or wrong colours; intermittent
-  power shows up as the panel resetting. If you see either, suspect these joints first.
-- Tinning the bare ends with solder makes them far more reliable if you have an iron.
-
-### Power warning - read this, it matters
-
-`VIN` on this board is just passed straight through from the USB 5V rail. USB gives
-you roughly 500 mA. A WS2812 LED draws up to ~60 mA at full white, so:
-
-- **8x8 panel (64 LEDs) at full white = ~3.8 A.** Far beyond USB.
-- Powering a matrix from `VIN` only works if you keep brightness low.
-
-So for the first test, cap brightness hard (`FastLED.setBrightness(20)` or lower) and
-light only a few LEDs. If you want the panel at real brightness, feed the panel from a
-separate 5V supply and connect only `GND` + `D13` from the ESP32 (grounds must be common).
-
-Also worth knowing: the ESP32 outputs 3.3V logic and WS2812 wants ~4V on DIN. It
-usually works anyway on short wires, but if the colours are glitchy that is why - a
-level shifter fixes it.
-
-## Which matrix do you have?
-
-The wiring above (`5V` / `GND` / `DIN`) means a WS2812B / NeoPixel style panel, which
-is what FastLED drives. If your panel instead has `VCC / GND / DIN / CS / CLK`, it is a
-MAX7219 module and needs a different library (`LedControl`) - say so and we will swap it.
-
-## Handy commands
+### 4. Flash the firmware
 
 ```sh
-arduino-cli compile --fqbn esp32:esp32:esp32 .
-arduino-cli upload -p <PORT> --fqbn esp32:esp32:esp32 .
-arduino-cli monitor -p <PORT> -c baudrate=115200
+./flash.sh
 ```
 
-In the Arduino IDE GUI instead: open `glowgrid.ino`, pick **ESP32 Dev Module** and the
-port from the toolbar dropdown, then hit Upload.
+That builds and uploads `status_ble`, the sketch you actually want. The panel
+should light up dim, and the board starts advertising over Bluetooth as
+`glowgrid`.
+
+### 5. Install the Mac app
+
+```sh
+cd mac-app
+./build.sh -i
+```
+
+This compiles the app, installs it to `/Applications` and launches it. A
+Bluetooth icon appears in your menu bar and macOS asks for Bluetooth
+permission once.
+
+Install to `/Applications` before turning on "Launch at login" — macOS records
+the app's *location* in the login item, so one registered from a build
+directory breaks the moment you rebuild.
+
+<!-- Add docs/photos/menu.png and uncomment:
+![the app panel](docs/photos/menu.png)
+-->
+
+## Using it
+
+Click the menu bar icon. It shows:
+
+- **Connection state** — a green dot when the panel is actually reachable.
+- **The five statuses.** Picking one switches to manual mode; it stays until
+  you change it.
+- **Automatic** — camera in use → *meeting*, microphone in use → *busy*,
+  neither → *available*.
+- **…and my calendar** — also show *meeting* while a calendar event is running.
+  Off until you enable it, and it asks permission the first time.
+- **Brightness** — `−` / `+`. The number shown is read back from the panel
+  itself, so it is right even if something else changed it.
+- **A message field** — scroll up to about 160 characters across the panel.
+  Shown in capitals; the font has no lowercase. *Clear* returns to the status.
+- **Panel** — which glowgrid to talk to, remembered between launches. Only
+  matters if you build more than one.
+- **Launch at login.**
+
+Manual and automatic are deliberately explicit modes rather than "manual wins
+for 20 minutes". A panel that reverts on its own with no visible cause feels
+haunted; one that stays where you put it does not.
+
+### Why the calendar as well as the camera?
+
+Camera and microphone answer "are you talking to someone right now", which
+misses the worst moment: the first minutes of a meeting, when you are walking
+to a room or waiting with your camera off, and the panel is cheerfully showing
+*Available* exactly when someone is most likely to interrupt.
+
+Events are ignored if they are all-day, marked Free, cancelled, or you declined
+them. Camera still outranks the calendar, so an unscheduled call shows as a
+meeting too.
+
+Nothing about your calendar leaves your Mac.
+
+## Command-line tools (optional)
+
+The app covers everything. These exist because they came first, and they are
+still handy for scripting.
+
+```sh
+mac-cli/glowgrid.py busy
+mac-cli/glowgrid.py --text "BACK AT 3"
+mac-cli/glowgrid.py --brightness 10
+mac-cli/glowgrid.py --brighter        # or --dimmer
+mac-cli/glowgrid.py --clear
+mac-cli/glowgrid.py --raw "b:12"      # send a command verbatim
+mac-cli/glowgrid.py --scan            # list nearby BLE devices
+mac-cli/glowgrid.py --forget          # drop the cached device address
+```
+
+The script carries PEP 723 inline dependency metadata, so `uv` builds its
+environment on the fly — nothing to install and no venv to activate. The device
+address is cached in `~/.cache/glowgrid/address`, which cuts a status change
+from about 8 s to 1.5 s.
+
+To call it from anywhere, symlink rather than copy, so edits take effect
+immediately:
+
+```sh
+ln -s "$PWD/mac-cli/glowgrid.py" ~/.local/bin/glowgrid
+```
+
+It can run while the app is connected: the firmware keeps advertising after a
+client connects, so several clients can talk to the panel at once.
+
+**`glowgrid-watch.py` is superseded by the app.** It polls the camera and
+microphone and sets the status, which is exactly what Automatic does — but
+without a persistent connection, so every change costs a full connect cycle. It
+is kept for headless use and as the reference implementation of the detection
+logic. If you are running the app, do not run the watcher as well; they will
+fight over the panel.
+
+Both tools need Bluetooth permission for your terminal app (System Settings ›
+Privacy & Security › Bluetooth). Without it the process dies with `SIGABRT` and
+no useful message.
+
+## Bluetooth protocol
+
+```
+device name  glowgrid
+service      6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+RX           6E400002-B5A3-F393-E0A9-E50E24DCCA9E   (write + read)
+```
+
+Write plain ASCII:
+
+| Command | Effect |
+|---|---|
+| `available` `busy` `meeting` `away` `off` | set the status |
+| `0` `1` `2` `3` `4` | the same, by index |
+| `b:<1-60>` | set brightness |
+| `b+` / `b-` | step brightness by 2 |
+| `t:<message>` | scroll a message (max 160 chars) |
+| `clear` | back to showing the status |
+
+Reading the same characteristic returns the current state:
+
+```
+status=busy brightness=10 mode=status
+```
+
+Unrecognised commands are ignored rather than rejected, so a typo does nothing
+and reports nothing.
+
+Those are the Nordic UART Service UUIDs. Nothing here is UART, but borrowing a
+well-known service means generic BLE apps like nRF Connect or LightBlue
+recognise the device — which is very useful for testing before you have written
+any client code.
+
+Brightness is saved to the ESP32's non-volatile storage and restored on boot,
+and only written when it actually changes, since flash has finite write cycles.
+
+## Troubleshooting
+
+**The panel does nothing after flashing.** Check `DIN`, not `DOUT` — see the
+three-wire-sets section above. Then check the ground connection.
+
+**Wrong colours, or flicker.** Usually a loose data joint. Note also that the
+ESP32 outputs 3.3 V logic while WS2812 wants around 4 V on `DIN`; it works on
+short wires, but a level shifter fixes it if colours are unstable.
+
+**The app says "Searching for a panel…" forever.** Is the board powered? Is
+another client holding it? Try `mac-cli/glowgrid.py --scan`.
+
+**Upload fails with "Unable to verify flash chip connection".** Upload speed.
+`flash.sh` already pins 115200; if you are calling `arduino-cli` by hand, add
+`:UploadSpeed=115200` to the FQBN.
+
+**"Port is busy or doesn't exist".** macOS names the port after the physical
+USB socket, so it changes when you replug into a different one. `flash.sh`
+detects it; `arduino-cli board list` shows it.
+
+**The serial monitor freezes at `configsip:`.** This is *not* a crash. With BLE
+running, monitor output can stop at the bootloader line while the sketch runs
+perfectly. Do not use the monitor as a liveness check — use a BLE scan or read
+the state characteristic. This cost real time here, twice.
+
+**Bluetooth permission was granted but the app still cannot connect.** Quit and
+relaunch; macOS occasionally needs it after a permission change.
+
+## How it works
+
+### Panel layout
+
+Determined empirically with `xy_calibrate`, not assumed:
+
+- chain index 0 is the **bottom-left** pixel
+- the chain runs in **horizontal rows of 8**
+- the bottom row runs left to right and each row above reverses
+  (**serpentine**)
+
+`XY(x, y)` in the firmware hides all of that behind ordinary screen
+coordinates — origin top-left, x right, y down — so everything above it can
+pretend the panel is a normal grid.
+
+Colour order is **GRB**, not RGB. If your reds come out green, that is why.
+
+### Icons
+
+The glyphs went through four iterations: thin strokes (too faint), a coloured
+disc with a white symbol (the fill drowned the symbol), a white disc with a
+coloured symbol (same problem, and every state looked like a white blob), and
+finally a big symbol on black with no fill.
+
+The lesson: at 8×8 the *shape* has to be the icon. A background fill spends
+most of your 64 pixels on something carrying no information. Strokes are two
+pixels thick wherever possible, because single-pixel lines vanish at a glance.
+
+### Detecting camera and microphone
+
+Two supported "is this device running for anybody" properties:
+
+- `kAudioDevicePropertyDeviceIsRunningSomewhere` (CoreAudio) for the microphone
+- `kCMIODevicePropertyDeviceIsRunningSomewhere` (CoreMediaIO) for the camera
+
+Neither needs camera or microphone permission, because no media is ever
+accessed — only device state. So the app asks for Bluetooth and, optionally,
+calendar, and nothing else.
+
+Two tempting alternatives were rejected: scraping `log stream` depends on
+private subsystem names that change between macOS releases, and matching
+process names only proves an app is open, not that it is capturing.
+
+Output-only audio devices are skipped explicitly. Without that, playing music
+registers as microphone activity and shows you as busy.
+
+## Powering it from a USB battery
+
+The obvious next step is to cut the panel loose from the Mac and run it from a
+USB power bank. The wiring does not change at all — the bank simply replaces
+the Mac as the USB power source. One thing decides whether it works:
+
+- **Current is not the problem.** The ESP32 with BLE averages 80–150 mA, and
+  the panel at these brightness levels adds only tens of milliamps.
+- **Auto-shutoff is the problem.** Many power banks switch themselves off when
+  draw falls below roughly 50–100 mA, assuming nothing is plugged in. This load
+  sits right around that threshold. **Buy a bank that advertises a low-current,
+  trickle or "small device" mode** — this is the single thing that decides
+  whether the idea works.
+- **Runtime is fine.** A 10,000 mAh bank gives roughly 6,000–7,000 mAh usable
+  after conversion losses, so at ~150 mA you get well over a day.
+- **Trade-off:** on battery there is no serial console, and reflashing means
+  going back to the Mac.
+
+If a bank does cut out on you, raising the brightness is the crude fix — it
+pushes draw above the cutoff, and looks better anyway.
+
+## Sharing it with someone else
+
+The app is **ad-hoc signed**, not notarised, because notarisation requires a
+paid Apple Developer account. On your own Mac this is invisible. On someone
+else's, Gatekeeper will refuse to open it, and the only honest advice is to
+build it themselves from source — it takes one command.
+
+If they insist on a copy of the bundle, right-click the app and choose **Open**
+rather than double-clicking; that offers an override the normal launch path
+does not. They will also need to grant Bluetooth permission by hand.
+
+The binary is universal (Apple Silicon and Intel), so at least architecture is
+not an obstacle.
+
+## Repository layout
+
+```
+status_ble/         the firmware that runs on the board  <-- the real one
+  font5x7.h         hand-written 5x7 font for scrolling text
+
+mac-app/            the menu bar app (Swift, no Xcode project)
+  Sources/          BLE client, sensors, status logic, UI
+  icon/             the app icon, drawn by code
+  build.sh          compile / install
+
+mac-cli/            optional command line tools
+  glowgrid.py       set status, brightness or text over BLE
+  glowgrid-watch.py camera/mic watcher (superseded by the app)
+  media-sensor/     the detector, as a standalone Swift binary
+
+flash.sh            build and upload a sketch, finding the port
+
+blink_test/         step 0  onboard LED only, no wiring
+matrix_test/        step 1  first light on the panel
+xy_calibrate/       step 2a discover the physical layout
+xy_test/            step 2b validate the XY() mapper
+status_display/     step 3  the five states on a timer, no Bluetooth
+```
+
+The numbered sketches are **frozen snapshots of each step**, not living code.
+They are kept so any layer can be reflashed in isolation when something breaks;
+only `status_ble` is maintained.
+
+There is no `.xcodeproj` on purpose. An Xcode project is a large generated blob
+that cannot be reviewed in a diff, and it buys nothing for an app this size:
+`build.sh` is 100 lines of `swiftc`.
+
+## Notes from the build
+
+Things that cost time here, recorded so they cost you less:
+
+- **The CH340 clone cannot handle the default 921600 upload baud.** It connects,
+  reads the chip ID, then dies with "Unable to verify flash chip connection".
+  Always 115200.
+- **`arduino-cli upload` does not compile first.** Use
+  `arduino-cli compile --upload`, or just use `flash.sh`.
+- **Arduino injects function prototypes** above the first function definition,
+  so any `enum` used in a function signature must be declared before it.
+- **Do not name an enum `Status` in a sketch that uses BLE.**
+  `BLECharacteristicCallbacks` has a nested `Status` that shadows yours inside
+  derived classes, producing a genuinely baffling error. The firmware's is
+  called `Presence`.
+- **A BLE peripheral stops advertising once a client connects.** This looked
+  exactly like a dead board: with the app connected, the panel vanished from
+  every scan and the CLI reported "could not find glowgrid". Calling
+  `startAdvertising()` in `onConnect` fixes it, and allows several clients at
+  once as a bonus.
+- **The serial monitor is not a liveness check with BLE running.** See
+  troubleshooting. This one misled the build twice.
+- **`status_ble` sits at about 94% of the default app partition.** There is
+  room, but not much. If you switch partition scheme, erase flash first.
+- **A `TextField` in a `MenuBarExtra` menu simply does not render.** The `.menu`
+  style is a real `NSMenu` and only holds menu items, which is why the app uses
+  the `.window` style. And because a menu-bar-only app is an *accessory* app
+  whose windows cannot become key, it has to activate itself when the panel
+  opens or the text field ignores every keystroke.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
