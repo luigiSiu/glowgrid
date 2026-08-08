@@ -3,7 +3,8 @@
 # build.sh - compile the menu bar app into Glowgrid.app
 #
 #   ./build.sh          build
-#   ./build.sh -r       build, then relaunch the app
+#   ./build.sh -r       build, then relaunch from build/
+#   ./build.sh -i       build, install into /Applications, launch from there
 #
 # No Xcode project on purpose. An .xcodeproj is a large generated blob that is
 # painful to diff and review, and buys nothing for an app this size. Everything
@@ -45,16 +46,33 @@ fi
 
 cp "$ICNS" "$RES_DIR/AppIcon.icns"
 
-swiftc \
-  -O \
-  -target arm64-apple-macos13.0 \
-  -framework SwiftUI \
-  -framework AppKit \
-  -framework CoreBluetooth \
-  -framework CoreAudio \
-  -framework CoreMediaIO \
-  -o "$MACOS_DIR/Glowgrid" \
-  "$HERE"/Sources/*.swift
+# Built for both architectures and stitched together with lipo. swiftc emits
+# one architecture per invocation, so a universal binary means compiling twice;
+# the alternative is an arm64-only app that simply will not launch on an Intel
+# Mac, which is a poor first impression for a project meant to be shared.
+ARCHS=(arm64 x86_64)
+SLICES=()
+
+for arch in "${ARCHS[@]}"; do
+  echo "compiling $arch"
+  slice="$HERE/build/Glowgrid-$arch"
+  swiftc \
+    -O \
+    -target "$arch-apple-macos13.0" \
+    -framework SwiftUI \
+    -framework AppKit \
+    -framework CoreBluetooth \
+    -framework CoreAudio \
+    -framework CoreMediaIO \
+    -framework EventKit \
+    -framework ServiceManagement \
+    -o "$slice" \
+    "$HERE"/Sources/*.swift
+  SLICES+=("$slice")
+done
+
+lipo -create -output "$MACOS_DIR/Glowgrid" "${SLICES[@]}"
+rm -f "${SLICES[@]}"
 
 cp "$HERE/Resources/Info.plist" "$APP/Contents/Info.plist"
 
@@ -67,9 +85,25 @@ codesign --force --sign - "$APP" >/dev/null 2>&1 || {
 
 echo "built: $APP"
 
-if [[ "${1:-}" == "-r" || "${1:-}" == "--run" ]]; then
-  echo "relaunching"
-  pkill -x Glowgrid 2>/dev/null || true
-  sleep 1
-  open "$APP"
-fi
+case "${1:-}" in
+  -r|--run)
+    echo "relaunching"
+    pkill -x Glowgrid 2>/dev/null || true
+    sleep 1
+    open "$APP"
+    ;;
+
+  -i|--install)
+    # Install before enabling "Launch at login". SMAppService records the app's
+    # location as well as its identifier, so a login item registered from
+    # build/ breaks as soon as that directory is rebuilt or removed.
+    # /Applications is the one path that stays put.
+    echo "installing to /Applications"
+    pkill -x Glowgrid 2>/dev/null || true
+    sleep 1
+    rm -rf "/Applications/Glowgrid.app"
+    cp -R "$APP" "/Applications/Glowgrid.app"
+    open "/Applications/Glowgrid.app"
+    echo "installed: /Applications/Glowgrid.app"
+    ;;
+esac

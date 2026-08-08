@@ -16,19 +16,26 @@ import SwiftUI
 struct GlowgridApp: App {
     @StateObject private var ble: BLEClient
     @StateObject private var controller: StatusController
+    @StateObject private var calendar: CalendarSensor
+    @StateObject private var loginItem = LoginItem()
 
     init() {
-        // One client, shared by the menu (for connection state) and the
-        // controller (for sending). Declared without an inline initialiser so
-        // it is not built twice.
+        // One client and one calendar sensor, shared by the menu (which shows
+        // their state) and the controller (which uses them). Declared without
+        // inline initialisers so they are not built twice.
         let client = BLEClient()
+        let calendarSensor = CalendarSensor()
         _ble = StateObject(wrappedValue: client)
-        _controller = StateObject(wrappedValue: StatusController(ble: client))
+        _calendar = StateObject(wrappedValue: calendarSensor)
+        _controller = StateObject(
+            wrappedValue: StatusController(ble: client, calendar: calendarSensor)
+        )
     }
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(ble: ble, controller: controller)
+            MenuContent(ble: ble, controller: controller,
+                        calendar: calendar, loginItem: loginItem)
         } label: {
             // The menu bar icon reflects the current status at a glance.
             Image(systemName: controller.status.symbol)
@@ -40,6 +47,8 @@ struct GlowgridApp: App {
 struct MenuContent: View {
     @ObservedObject var ble: BLEClient
     @ObservedObject var controller: StatusController
+    @ObservedObject var calendar: CalendarSensor
+    @ObservedObject var loginItem: LoginItem
 
     @State private var message: String = ""
 
@@ -54,6 +63,8 @@ struct MenuContent: View {
             messageSection
             Divider()
             panelSection
+            Divider()
+            settingsSection
             Divider()
             footer
         }
@@ -105,6 +116,27 @@ struct MenuContent: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(.leading, 20)
+            }
+
+            // Indented, because it modifies Automatic rather than being an
+            // alternative to it.
+            row(title: "…and my calendar", ticked: controller.useCalendar, indent: 20) {
+                Task { await controller.setUseCalendar(!controller.useCalendar) }
+            }
+
+            if controller.useCalendar, let title = calendar.currentEventTitle {
+                Text("In: \(title)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, 40)
+            }
+
+            if calendar.access == .denied {
+                Text("Calendar access denied - enable it in System Settings › Privacy")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 40)
             }
         }
     }
@@ -199,6 +231,26 @@ struct MenuContent: View {
         }
     }
 
+    private var settingsSection: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            row(title: "Launch at login", ticked: loginItem.enabled) {
+                loginItem.toggle()
+            }
+
+            if let problem = loginItem.problem {
+                Text(problem)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+            }
+        }
+        .onAppear {
+            // The user can turn the login item off in System Settings behind
+            // our back, so the state is re-read every time the panel opens.
+            loginItem.refresh()
+        }
+    }
+
     private var footer: some View {
         HStack {
             Spacer()
@@ -227,12 +279,16 @@ struct MenuContent: View {
     }
 
     /// A menu-item-alike row: full width, tick on the left, no button chrome.
-    private func row(title: String, ticked: Bool, action: @escaping () -> Void) -> some View {
+    private func row(title: String,
+                     ticked: Bool,
+                     indent: CGFloat = 0,
+                     action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Text(ticked ? "✓" : " ")
                     .font(.system(size: 12))
                     .frame(width: 12, alignment: .leading)
+                    .padding(.leading, indent)
                 Text(title)
                     .font(.system(size: 12))
                 Spacer()

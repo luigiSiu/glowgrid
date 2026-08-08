@@ -20,8 +20,19 @@ final class StatusController: ObservableObject {
     @Published private(set) var status: Status = .off
     @Published private(set) var mode: ControlMode = .manual
 
+    /*
+     * Whether the calendar is consulted as well as the hardware. Off unless
+     * the user has turned it on, and remembered so that choice survives a
+     * restart - being asked for calendar access on every launch would be
+     * obnoxious.
+     */
+    @Published private(set) var useCalendar: Bool
+
     private let ble: BLEClient
+    private let calendar: CalendarSensor
     private var timer: Timer?
+
+    private let calendarKey = "useCalendar"
 
     /*
      * Detection is debounced: a new reading must be seen twice in a row before
@@ -40,8 +51,10 @@ final class StatusController: ObservableObject {
 
     private let pollInterval: TimeInterval = 3.0
 
-    init(ble: BLEClient) {
+    init(ble: BLEClient, calendar: CalendarSensor) {
         self.ble = ble
+        self.calendar = calendar
+        self.useCalendar = UserDefaults.standard.bool(forKey: calendarKey)
     }
 
     // MARK: - User actions
@@ -60,6 +73,26 @@ final class StatusController: ObservableObject {
         applyNextImmediately = true
         startPolling()
         poll()          // react now rather than waiting a whole cycle
+    }
+
+    /// Called when the calendar option is toggled. Asks for permission the
+    /// first time it is switched on.
+    func setUseCalendar(_ on: Bool) async {
+        if on && calendar.access == .notDetermined {
+            await calendar.requestAccess()
+        }
+
+        /*
+         * If the user refused, leave the switch off rather than showing it on
+         * while quietly doing nothing.
+         */
+        useCalendar = on && calendar.access == .granted
+        UserDefaults.standard.set(useCalendar, forKey: calendarKey)
+
+        if mode == .automatic {
+            applyNextImmediately = true
+            poll()
+        }
     }
 
     // MARK: - Automatic detection
@@ -83,7 +116,8 @@ final class StatusController: ObservableObject {
 
         let camera = MediaSensor.cameraInUse()
         let mic = MediaSensor.microphoneInUse()
-        let wanted = decide(camera: camera, mic: mic)
+        let scheduled = useCalendar && calendar.inMeeting()
+        let wanted = decide(camera: camera, mic: mic, scheduled: scheduled)
 
         if wanted == status {
             candidate = nil
@@ -100,8 +134,16 @@ final class StatusController: ObservableObject {
         }
     }
 
-    private func decide(camera: Bool, mic: Bool) -> Status {
+    /*
+     * Order matters. The calendar outranks the microphone because a scheduled
+     * meeting you are listening to in silence is still a meeting, while the
+     * microphone alone only proves something is recording - which could be
+     * dictation. Camera stays first: if it is on, you are unambiguously on a
+     * call, whether or not anyone put it in a calendar.
+     */
+    private func decide(camera: Bool, mic: Bool, scheduled: Bool) -> Status {
         if camera { return .meeting }
+        if scheduled { return .meeting }
         if mic { return .busy }
         return .available
     }
