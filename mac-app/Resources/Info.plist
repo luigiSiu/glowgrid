@@ -52,5 +52,19 @@
     -->
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Glowgrid connects to your LED status panel over Bluetooth.</string>
+
+    <!--
+        Calendar access, requested only if you switch the calendar option on.
+
+        Both keys are present deliberately. macOS 14 split calendar permission
+        into full and write-only access and introduced the FullAccess key;
+        macOS 13 only knows the older one. Ship both and each version finds
+        the string it looks for.
+    -->
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Glowgrid checks whether you are currently in a meeting so the panel can show it. Nothing leaves your Mac.</string>
+
+    <key>NSCalendarsUsageDescription</key>
+    <string>Glowgrid checks whether you are currently in a meeting so the panel can show it. Nothing leaves your Mac.</string>
 </dict>
 </plist>
