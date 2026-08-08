@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Glowgrid</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Glowgrid</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>dev.luigisiu.glowgrid</string>
+
+    <key>CFBundleExecutable</key>
+    <string>Glowgrid</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!--
+        Menu bar only: no Dock icon, no app switcher entry, no main window.
+        Without this the app would behave like a normal windowed application.
+    -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!--
+        Required for CoreBluetooth. macOS shows this string when it asks for
+        permission the first time.
+
+        This is precisely what the Python CLI lacked: a plain script is not a
+        bundle, so it cannot declare a usage description, and macOS kills the
+        process with SIGABRT instead of prompting. As a proper bundle we get a
+        normal prompt once and it is remembered.
+    -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Glowgrid connects to your LED status panel over Bluetooth.</string>
+</dict>
+</plist>
