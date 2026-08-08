@@ -3,7 +3,14 @@ build/
 # Compiled Swift helper. Rebuild with:
 #   cd mac-cli && swiftc -O media-sensor/media_sensor.swift -o bin/media-sensor
 mac-cli/bin/
+
+# Built menu bar app. Rebuild with:
+#   cd mac-app && ./build.sh
+mac-app/build/
 *.bin
 *.elf
 *.map
 .DS_Store
+
+# JetBrains IDE settings
+.idea/
