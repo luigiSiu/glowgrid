@@ -22,6 +22,46 @@ arduino-cli compile --upload -p /dev/cu.usbserial-110 \
 
 In the Arduino IDE GUI: Tools > Upload Speed > 115200.
 
+### The port name changes
+
+macOS names the port after the physical USB socket, so it moves if you replug into a
+different one - it has been both `/dev/cu.usbserial-110` and `/dev/cu.usbserial-10`.
+If an upload fails with "port is busy or doesn't exist", check the current name first:
+
+```sh
+arduino-cli board list
+```
+
+## Project layout
+
+```
+blink_test/        step 0  onboard LED only, no wiring
+matrix_test/       step 1  first light on the panel
+xy_calibrate/      step 2a discover the physical layout
+xy_test/           step 2b validate the XY() mapper
+status_display/    step 3  the five states on a timer, no Bluetooth
+status_ble/        step 4  BLE-driven  <-- the one that runs on the board
+
+mac-cli/
+  glowgrid.py             set a status over BLE      (Python + bleak, via uv)
+  glowgrid-watch.py       camera/mic watcher         (Python, stdlib only)
+  media-sensor/*.swift    camera/mic detector source (compiles to bin/media-sensor)
+  bin/media-sensor        the compiled detector
+```
+
+The numbered sketches are **frozen snapshots of each step**, not living code. They are
+kept so any layer can be reflashed in isolation when something breaks. Only `status_ble`
+is maintained; the others intentionally lag behind.
+
+Two symlinks in `~/.local/bin` make the tools global:
+
+```
+glowgrid       -> mac-cli/glowgrid.py
+glowgrid-watch -> mac-cli/glowgrid-watch.py
+```
+
+Because they are symlinks and not copies, editing the repo updates the commands at once.
+
 ## Sketches
 
 Each is a step that was verified before moving on, so any of them can be reflashed to
@@ -138,8 +178,8 @@ cd mac-cli
 swiftc -O media-sensor/media_sensor.swift -o bin/media-sensor
 ```
 
-Verified: camera flips 0 -> 1 -> 0 around opening and closing Photo Booth. Microphone
-detection uses the analogous property but has not yet been confirmed on a real call.
+Verified: camera flips 0 -> 1 -> 0 around opening and closing Photo Booth, and microphone
+detection confirmed on a real call. Both paths work.
 
 ## Powering from a USB battery
 
