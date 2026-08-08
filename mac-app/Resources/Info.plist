@@ -14,6 +14,14 @@
     <key>CFBundleExecutable</key>
     <string>Glowgrid</string>
 
+    <!--
+        Only seen in Finder, Get Info and Time Machine. The menu bar shows an
+        SF Symbol chosen at runtime to match the current status, which is a
+        separate thing entirely and deliberately not this icon.
+    -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+
     <key>CFBundlePackageType</key>
     <string>APPL</string>
 

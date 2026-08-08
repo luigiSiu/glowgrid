@@ -22,11 +22,28 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$HERE/build/Glowgrid.app"
 MACOS_DIR="$APP/Contents/MacOS"
+RES_DIR="$APP/Contents/Resources"
+ICNS="$HERE/build/AppIcon.icns"
+ICON_SRC="$HERE/icon/make-icon.swift"
 
 echo "building Glowgrid.app"
 
 rm -rf "$APP"
-mkdir -p "$MACOS_DIR"
+mkdir -p "$MACOS_DIR" "$RES_DIR"
+
+# The icon is drawn by code rather than committed as a binary, so it has to be
+# rendered before it can be bundled. Rendering takes a couple of seconds, so
+# the result is cached in build/ and only redone when the generator changes.
+if [[ ! -f "$ICNS" || "$ICON_SRC" -nt "$ICNS" ]]; then
+  echo "drawing icon"
+  ICONSET="$HERE/build/Glowgrid.iconset"
+  rm -rf "$ICONSET"
+  swift "$ICON_SRC" "$ICONSET"
+  iconutil -c icns "$ICONSET" -o "$ICNS"
+  rm -rf "$ICONSET"
+fi
+
+cp "$ICNS" "$RES_DIR/AppIcon.icns"
 
 swiftc \
   -O \
