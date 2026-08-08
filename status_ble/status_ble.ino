@@ -1,13 +1,18 @@
 /*
  * glowgrid - step 4: status display driven over Bluetooth LE
  *
- * Same display as step 3, but the status now comes from BLE instead of a
- * timer. Write one of these ASCII strings to the RX characteristic:
+ * Write ASCII commands to the RX characteristic:
  *
- *     available | busy | meeting | away | off
+ *     available | busy | meeting | away | off   set the status
+ *     0 | 1 | 2 | 3 | 4                         the same, by index
+ *     b:<1-60>                                  set brightness
+ *     b+ | b-                                   step brightness
+ *     t:<message>                               scroll a message
+ *     clear                                     back to showing the status
  *
- * Single digits 0-4 work too, in that same order, which is handy when
- * poking at it from a generic BLE app.
+ * Bare status words are the original protocol and still work unchanged, so
+ * the Python CLI needed no edits. Brightness is saved to NVS and restored on
+ * boot. The font has no lowercase, so messages are upper-cased on arrival.
  *
  * BLE identity:
  *   device name  glowgrid
@@ -19,18 +24,18 @@
  * nRF Connect or LightBlue recognise the device, which makes testing much
  * easier before any Mac code exists.
  *
- * NOTE: this sketch must be built with the huge_app partition scheme.
- * BLE plus FastLED does not fit in the default 1.3 MB app partition:
- *
- *   arduino-cli compile --upload -p <PORT> \
- *     --fqbn "esp32:esp32:esp32:UploadSpeed=115200,PartitionScheme=huge_app" \
- *     status_ble
+ * Build with ./flash.sh from the repo root, which finds the port and pins the
+ * 115200 upload speed this CH340 clone needs. The default partition scheme is
+ * fine; an earlier note here claimed huge_app was required, which was wrong.
  */
 
 #include <FastLED.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+#include <Preferences.h>
+
+#include "font5x7.h"
 
 #define DATA_PIN    13
 #define NUM_LEDS    64
@@ -42,9 +47,19 @@
  * pixels bloom into their neighbours and the shape turns into a glowing blob,
  * so less brightness genuinely reads BETTER close up. 4 was slightly too dim,
  * 6 is the sweet spot. Single digits are normal here.
+ *
+ * This is now only the DEFAULT. Brightness is adjustable over BLE and the
+ * chosen value is saved, so it is restored on the next power up.
  */
-#define BRIGHTNESS  6
+#define DEFAULT_BRIGHTNESS 6
+#define BRIGHTNESS_STEP    2
+#define BRIGHTNESS_MIN     1     // 0 would look identical to "off" and confuse
+#define BRIGHTNESS_MAX     60    // above this it dazzles and washes out shapes
 #define MAX_MILLIAMPS 300
+
+// Scrolling text
+#define TEXT_MAX_LEN    160
+#define SCROLL_STEP_MS  90       // one pixel per step
 
 // How long an icon takes to draw itself in, in milliseconds.
 #define ANIM_MS 700
@@ -95,6 +110,23 @@ enum Presence {
 Presence currentStatus = STATUS_OFF;
 
 /*
+ * What the panel is currently showing. Text is a temporary takeover: sending
+ * `clear`, or any status word, returns to MODE_STATUS.
+ */
+enum DisplayMode {
+  MODE_STATUS,
+  MODE_TEXT
+};
+
+DisplayMode displayMode = MODE_STATUS;
+
+uint8_t brightness = DEFAULT_BRIGHTNESS;
+
+// Non-volatile storage, so brightness survives a power cycle. Without this,
+// unplugging the panel silently resets it and looks like a bug.
+Preferences prefs;
+
+/*
  * BLE callbacks run on the Bluetooth task, not on the Arduino loop task.
  * Calling FastLED.show() from there while loop() might also be drawing is
  * asking for trouble, so callbacks only ever record intent in these
@@ -107,6 +139,29 @@ volatile bool clientConnected = false;
 // Animation clock. Driven from loop(), never from a BLE callback.
 uint32_t animStart = 0;
 bool animating = false;
+
+/*
+ * Scrolling text state. Like the status, text arriving over BLE is recorded
+ * here by the callback and picked up by loop(); nothing is drawn from the
+ * Bluetooth task.
+ */
+char scrollText[TEXT_MAX_LEN + 1] = {0};
+volatile bool textPending = false;
+char pendingText[TEXT_MAX_LEN + 1] = {0};
+int scrollOffset = 0;
+int scrollWidth = 0;
+uint32_t lastScrollStep = 0;
+
+// Brightness changes also come in on the BLE task.
+volatile bool brightnessPending = false;
+volatile uint8_t pendingBrightness = DEFAULT_BRIGHTNESS;
+
+/*
+ * Kept so the characteristic's readable value can be refreshed whenever state
+ * changes. Without this the panel is write-only: the only way to know what it
+ * is doing is to look at it, which makes anything automated untestable.
+ */
+BLECharacteristic *rxCharacteristic = nullptr;
 
 // ---------------------------------------------------------------------------
 // Drawing layer (measured and validated in step 2)
@@ -359,14 +414,62 @@ void drawGlyphIdle(const uint8_t glyph[MATRIX_H], CRGB colour, uint32_t now) {
 }
 
 /*
- * Connection indicator: a dim blue dot in the bottom-right corner, shown only
- * when the panel would otherwise be blank. It still distinguishes "nothing
- * connected" from "deliberately off", without punching a hole in the corner of
- * every edge-to-edge icon.
+ * The blue "nothing connected" dot was removed here.
+ *
+ * The Mac app now holds a persistent connection, so the dot essentially never
+ * appeared, and it shows connection state as text in the menu instead - far
+ * clearer than one pixel. Worth noting the red LED on the board indicates
+ * power only; it says nothing about the Bluetooth link.
  */
-void drawConnectionIndicator() {
-  if (!clientConnected && currentStatus == STATUS_OFF) {
-    setPixel(MATRIX_W - 1, MATRIX_H - 1, CRGB(0, 0, 30));
+
+// ---------------------------------------------------------------------------
+// Scrolling text
+// ---------------------------------------------------------------------------
+
+/*
+ * Total width of the current message in pixels, including the one column gap
+ * after each character, plus a full panel width of padding at each end so the
+ * text scrolls fully on and fully off rather than snapping.
+ */
+int textPixelWidth(const char *text) {
+  int len = strlen(text);
+  return len * (FONT_WIDTH + FONT_GAP) + 2 * MATRIX_W;
+}
+
+/*
+ * Draw the 8 pixel wide window of the message that starts at scrollOffset.
+ *
+ * The message is never assembled in memory as a bitmap. For each of the 8
+ * visible columns we work out which character and which column within it we
+ * are looking at, then read that single byte from the font. A 160 character
+ * message would otherwise need a ~1 KB buffer for no benefit.
+ */
+void drawScrollingText(CRGB colour) {
+  for (int screenX = 0; screenX < MATRIX_W; screenX++) {
+    int virtualX = scrollOffset + screenX - MATRIX_W;   // leading blank pad
+
+    if (virtualX < 0) {
+      continue;                                          // still padding
+    }
+
+    int charIndex = virtualX / (FONT_WIDTH + FONT_GAP);
+    int column = virtualX % (FONT_WIDTH + FONT_GAP);
+
+    if (charIndex >= (int)strlen(scrollText)) {
+      continue;                                          // trailing padding
+    }
+
+    uint8_t bits = fontColumn(scrollText[charIndex], column);
+    if (bits == 0) {
+      continue;
+    }
+
+    // Font rows are 7 tall; nudge down one to sit centred on an 8 row panel.
+    for (int row = 0; row < 7; row++) {
+      if ((bits >> row) & 1) {
+        setPixel(screenX, row, colour);
+      }
+    }
   }
 }
 
@@ -379,7 +482,6 @@ void renderFrame(float p) {
   if (currentArt(&glyph, &colour)) {
     drawGlyphProgress(glyph, colour, easeOutCubic(p));
   }
-  drawConnectionIndicator();
   FastLED.show();
 }
 
@@ -389,10 +491,13 @@ void renderIdle() {
   CRGB colour;
 
   FastLED.clear();
-  if (currentArt(&glyph, &colour)) {
+
+  if (displayMode == MODE_TEXT) {
+    drawScrollingText(CRGB::White);
+  } else if (currentArt(&glyph, &colour)) {
     drawGlyphIdle(glyph, colour, millis());
   }
-  drawConnectionIndicator();
+
   FastLED.show();
 }
 
@@ -405,6 +510,29 @@ void startAnimation() {
   animating = true;
 }
 
+/*
+ * Publish current state on the readable characteristic, as plain text:
+ *
+ *   status=busy brightness=10 mode=status
+ *
+ * A client can read this to show the real brightness rather than guessing, and
+ * to recover the panel's state after reconnecting. Plain key=value keeps it
+ * readable in any generic BLE app.
+ */
+void publishState() {
+  if (rxCharacteristic == nullptr) {
+    return;
+  }
+
+  char buf[96];
+  snprintf(buf, sizeof(buf), "status=%s brightness=%u mode=%s",
+           statusName(currentStatus),
+           (unsigned)brightness,
+           displayMode == MODE_TEXT ? "text" : "status");
+
+  rxCharacteristic->setValue(buf);
+}
+
 // ---------------------------------------------------------------------------
 // BLE
 // ---------------------------------------------------------------------------
@@ -413,6 +541,19 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     clientConnected = true;
     Serial.println("BLE: client connected");
+
+    /*
+     * Keep advertising after a client connects.
+     *
+     * By default a BLE peripheral goes silent once connected, which caused a
+     * genuinely confusing failure: with the Mac app holding its persistent
+     * connection, the panel vanished from every scan and the CLI reported
+     * "could not find glowgrid" as though the board were dead.
+     *
+     * Continuing to advertise keeps it discoverable and lets a second client
+     * (the CLI, a phone, another Mac) connect at the same time.
+     */
+    server->startAdvertising();
   }
 
   void onDisconnect(BLEServer *server) override {
@@ -423,16 +564,69 @@ class ServerCallbacks : public BLEServerCallbacks {
   }
 };
 
+/*
+ * Command protocol.
+ *
+ * Bare status words are still accepted exactly as before, so the Python CLI
+ * keeps working untouched. Everything new is prefixed, which keeps the two
+ * kinds of message unambiguous:
+ *
+ *   available | busy | meeting | away | off   set status
+ *   b:<0-255>                                 set brightness
+ *   b+ / b-                                   step brightness
+ *   t:<text>                                  scroll a message
+ *   clear                                     back to showing the status
+ *
+ * Runs on the BLE task, so it only records intent; loop() does the drawing.
+ */
 class RxCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
-    String value = characteristic->getValue();
+    String raw = characteristic->getValue();
+    raw.trim();
 
     Serial.print("BLE: received \"");
-    Serial.print(value);
+    Serial.print(raw);
     Serial.println("\"");
 
+    // Text is handled before lower-casing, so messages keep their own case.
+    if (raw.startsWith("t:")) {
+      String body = raw.substring(2);
+      if (body.length() == 0) {
+        Serial.println("BLE: empty text, ignoring");
+        return;
+      }
+      body.toUpperCase();          // the font has no lowercase glyphs
+      strncpy(pendingText, body.c_str(), TEXT_MAX_LEN);
+      pendingText[TEXT_MAX_LEN] = '\0';
+      textPending = true;
+      return;
+    }
+
+    String cmd = raw;
+    cmd.toLowerCase();
+
+    if (cmd == "clear") {
+      pendingStatus = currentStatus;
+      statusPending = true;        // loop() switches back to MODE_STATUS
+      return;
+    }
+
+    if (cmd == "b+" || cmd == "b-") {
+      int next = brightness + (cmd == "b+" ? BRIGHTNESS_STEP : -BRIGHTNESS_STEP);
+      pendingBrightness = (uint8_t)constrain(next, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+      brightnessPending = true;
+      return;
+    }
+
+    if (cmd.startsWith("b:")) {
+      int value = cmd.substring(2).toInt();
+      pendingBrightness = (uint8_t)constrain(value, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+      brightnessPending = true;
+      return;
+    }
+
     Presence parsed;
-    if (parseStatus(value, parsed)) {
+    if (parseStatus(cmd, parsed)) {
       pendingStatus = parsed;
       statusPending = true;
     } else {
@@ -454,7 +648,8 @@ void setupBLE() {
     BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_READ
   );
   rx->setCallbacks(new RxCallbacks());
-  rx->setValue("off");
+  rxCharacteristic = rx;
+  publishState();
 
   service->start();
 
@@ -476,8 +671,18 @@ void setup() {
   Serial.println();
   Serial.println("glowgrid: BLE status display");
 
+  /*
+   * Restore the saved brightness. Without this, every power cycle silently
+   * reverts to the default and looks like the setting did not stick.
+   */
+  prefs.begin("glowgrid", false);
+  brightness = prefs.getUChar("brightness", DEFAULT_BRIGHTNESS);
+  brightness = constrain(brightness, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+  Serial.print("brightness restored: ");
+  Serial.println(brightness);
+
   FastLED.addLeds<WS2812B, DATA_PIN, GRB>(leds, NUM_LEDS);
-  FastLED.setBrightness(BRIGHTNESS);
+  FastLED.setBrightness(brightness);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, MAX_MILLIAMPS);
   FastLED.clear(true);
 
@@ -487,12 +692,57 @@ void setup() {
 }
 
 void loop() {
+  if (brightnessPending) {
+    brightnessPending = false;
+    brightness = pendingBrightness;
+    FastLED.setBrightness(brightness);
+
+    // Only written when it actually changes: flash has finite write cycles,
+    // and holding down a brightness key should not chew through them.
+    prefs.putUChar("brightness", brightness);
+    publishState();
+
+    Serial.print("brightness -> ");
+    Serial.println(brightness);
+  }
+
+  if (textPending) {
+    textPending = false;
+    strncpy(scrollText, pendingText, TEXT_MAX_LEN);
+    scrollText[TEXT_MAX_LEN] = '\0';
+
+    displayMode = MODE_TEXT;
+    scrollOffset = 0;
+    scrollWidth = textPixelWidth(scrollText);
+    lastScrollStep = millis();
+    animating = false;            // a reveal would fight the scroll
+    publishState();
+
+    Serial.print("text -> \"");
+    Serial.print(scrollText);
+    Serial.println("\"");
+  }
+
   if (statusPending) {
     statusPending = false;
     currentStatus = pendingStatus;
+    displayMode = MODE_STATUS;    // any status also cancels scrolling text
+    publishState();
     Serial.print("status -> ");
     Serial.println(statusName(currentStatus));
     startAnimation();
+  }
+
+  // Advance the scroll on its own clock, independent of the frame rate.
+  if (displayMode == MODE_TEXT) {
+    uint32_t now = millis();
+    if (now - lastScrollStep >= SCROLL_STEP_MS) {
+      lastScrollStep = now;
+      scrollOffset++;
+      if (scrollOffset >= scrollWidth) {
+        scrollOffset = 0;         // loop the message
+      }
+    }
   }
 
   /*

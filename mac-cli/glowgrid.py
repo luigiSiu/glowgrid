@@ -4,7 +4,7 @@
 # dependencies = ["bleak>=0.22"]
 # ///
 """
-glowgrid - set the status shown on the ESP32 LED panel, over Bluetooth LE.
+glowgrid - control the ESP32 LED panel over Bluetooth LE.
 
 Usage:
     ./glowgrid.py available
@@ -12,6 +12,13 @@ Usage:
     ./glowgrid.py meeting
     ./glowgrid.py away
     ./glowgrid.py off
+
+    ./glowgrid.py --text "BACK IN 5"   scroll a message
+    ./glowgrid.py --clear              stop scrolling, show the status again
+    ./glowgrid.py --brightness 12      set brightness (1-60)
+    ./glowgrid.py --brighter           step brightness up
+    ./glowgrid.py --dimmer             step brightness down
+    ./glowgrid.py --raw "b:20"         send any command verbatim
 
     ./glowgrid.py --scan          list nearby BLE devices
     ./glowgrid.py --forget        clear the cached device address
@@ -65,19 +72,24 @@ async def find_device(timeout: float = 10.0):
     return device
 
 
-async def send_status(status: str) -> int:
-    """Connect and write the status. Returns a process exit code."""
+
+
+async def send_command(command: str) -> int:
+    """
+    Connect and write one command verbatim. Returns a process exit code.
+
+    The firmware accepts bare status words plus prefixed commands (b:, b+, b-,
+    t:, clear), so this one function covers everything the panel understands.
+    """
+    payload = command.encode()
 
     target = read_cached_address()
-
     if target:
         # Try the cached address first. This is the fast path.
         try:
             async with BleakClient(target, timeout=10.0) as client:
-                await client.write_gatt_char(
-                    CHAR_RX_UUID, status.encode(), response=True
-                )
-                print(f"status set to {status}")
+                await client.write_gatt_char(CHAR_RX_UUID, payload, response=True)
+                print(f"sent: {command}")
                 return 0
         except Exception as exc:
             print(f"cached address failed ({exc}), rescanning...", file=sys.stderr)
@@ -92,11 +104,11 @@ async def send_status(status: str) -> int:
 
     try:
         async with BleakClient(device, timeout=10.0) as client:
-            await client.write_gatt_char(CHAR_RX_UUID, status.encode(), response=True)
-            print(f"status set to {status}")
+            await client.write_gatt_char(CHAR_RX_UUID, payload, response=True)
+            print(f"sent: {command}")
             return 0
     except Exception as exc:
-        print(f"failed to set status: {exc}", file=sys.stderr)
+        print(f"failed to send: {exc}", file=sys.stderr)
         return 1
 
 
@@ -111,11 +123,21 @@ async def scan() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Set the status on the glowgrid LED panel over BLE."
+        description="Control the glowgrid LED panel over BLE."
     )
     parser.add_argument(
         "status", nargs="?", choices=STATUSES, help="status to display"
     )
+    parser.add_argument("--text", metavar="MESSAGE", help="scroll a message")
+    parser.add_argument(
+        "--clear", action="store_true", help="stop scrolling, show the status"
+    )
+    parser.add_argument(
+        "--brightness", type=int, metavar="N", help="set brightness (1-60)"
+    )
+    parser.add_argument("--brighter", action="store_true", help="step brightness up")
+    parser.add_argument("--dimmer", action="store_true", help="step brightness down")
+    parser.add_argument("--raw", metavar="CMD", help="send a command verbatim")
     parser.add_argument(
         "--scan", action="store_true", help="list nearby BLE devices and exit"
     )
@@ -132,11 +154,28 @@ def main() -> int:
     if args.scan:
         return asyncio.run(scan())
 
-    if not args.status:
+    # Resolve whichever option was given into a single wire command.
+    command: str | None = None
+    if args.raw:
+        command = args.raw
+    elif args.text:
+        command = f"t:{args.text}"
+    elif args.clear:
+        command = "clear"
+    elif args.brightness is not None:
+        command = f"b:{args.brightness}"
+    elif args.brighter:
+        command = "b+"
+    elif args.dimmer:
+        command = "b-"
+    elif args.status:
+        command = args.status
+
+    if command is None:
         parser.print_help()
         return 2
 
-    return asyncio.run(send_status(args.status))
+    return asyncio.run(send_command(command))
 
 
 if __name__ == "__main__":
