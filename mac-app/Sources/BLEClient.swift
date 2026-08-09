@@ -79,12 +79,20 @@ final class BLEClient: NSObject, ObservableObject {
 
     var hasPreferredPanel: Bool { preferredPanelID != nil }
 
+    var isConnected: Bool { state == .connected }
+
     /*
-     * Commands requested before the characteristic is ready are queued rather
-     * than dropped. Discovery takes a moment at launch, so without this the
-     * first thing you do after opening the app would silently vanish.
+     * Called once the panel is connected and writable, including after a
+     * reconnection.
+     *
+     * This exists because the panel forgets its status when it loses power: it
+     * boots showing nothing, while the app still believes it is showing
+     * whatever you last chose. Somebody has to resolve that disagreement, and
+     * the app is the one that knows the answer - so it pushes the status again
+     * from here. Without it, a power cycle leaves the panel dark until you
+     * pick a status by hand, which is exactly the bug this replaces.
      */
-    private var pending: [String] = []
+    var onConnected: (() -> Void)?
 
     override init() {
         super.init()
@@ -135,13 +143,51 @@ final class BLEClient: NSObject, ObservableObject {
         preferredPanelID = nil
     }
 
+    /*
+     * Look for panels again.
+     *
+     * Needed because scanning is deliberately stopped once connected, so the
+     * picker would otherwise never learn about a panel switched on later.
+     */
+    func rescan() {
+        panels.removeAll()
+
+        // Keep the one we are talking to in the list, or it would vanish from
+        // the picker until the scan happened to see it again.
+        if let peripheral, state == .connected {
+            panels.append(DiscoveredPanel(
+                id: peripheral.identifier,
+                name: peripheral.name ?? glowgridDeviceName
+            ))
+        }
+
+        guard central.state == .poweredOn else { return }
+        central.scanForPeripherals(withServices: [glowgridServiceUUID])
+
+        // Time-boxed. Scanning indefinitely while connected is what caused the
+        // flapping described in startScan(), so it must not be left running.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if state == .connected {
+                central.stopScan()
+            }
+        }
+    }
+
     // MARK: - Internals
 
     private func send(command: String) {
-        guard let peripheral, let rx, state == .connected else {
-            pending.append(command)
-            return
-        }
+        /*
+         * Dropped, not queued, when there is nothing to write to.
+         *
+         * Queueing was worse than it sounds. Ten impatient taps on brightness
+         * while the panel was unplugged would all arrive at once on
+         * reconnection and send it lurching, and a status queued behind them
+         * could be applied out of order. Statuses do not need a queue anyway:
+         * onConnected re-sends the current one, so intent survives the outage
+         * without replaying the individual clicks that expressed it.
+         */
+        guard let peripheral, let rx, state == .connected else { return }
         write(command, to: peripheral, characteristic: rx)
     }
 
@@ -154,9 +200,28 @@ final class BLEClient: NSObject, ObservableObject {
         peripheral.readValue(for: characteristic)
     }
 
+    /*
+     * Scan for panels. Only ever while NOT connected.
+     *
+     * Leaving the scanner running after connecting caused a genuine
+     * connect/disconnect loop, visible as the panel blinking and the menu
+     * flicking between Connected and Searching several times a second. The
+     * mechanism: the firmware deliberately keeps advertising while connected,
+     * so our own panel reappears in every scan result, and each result drove
+     * another connect attempt on a peripheral that was already connected. Each
+     * resulting reconnect re-sent the status, which restarted the reveal
+     * animation - hence the blinking.
+     *
+     * So: scan while looking, stop once found.
+     */
     private func startScan() {
         guard central.state == .poweredOn else { return }
-        state = .searching
+
+        // Guarded because startScan() is also reached from paths that can run
+        // while a link is up, and clobbering the state would lie to the menu.
+        if state != .connected {
+            state = .searching
+        }
 
         /*
          * Filtered by service UUID rather than name: macOS can report a
@@ -233,6 +298,14 @@ extension BLEClient: CBCentralManagerDelegate {
 
             guard shouldConnect else { return }
 
+            /*
+             * Do not stack connect requests. A peripheral that is already
+             * connected, or has a connect request in flight, is not
+             * .disconnected - and issuing another attempt for it is what turned
+             * a still-advertising panel into a connect/disconnect loop.
+             */
+            guard peripheral.state == .disconnected else { return }
+
             self.peripheral = peripheral
             peripheral.delegate = self
             state = .connecting
@@ -254,7 +327,30 @@ extension BLEClient: CBCentralManagerDelegate {
         Task { @MainActor in
             rx = nil
             connectedPanelID = nil
-            state = .disconnected
+
+            // Stale the moment the link drops, and misleading if left on
+            // screen: an unplugged panel has no brightness.
+            reportedBrightness = nil
+
+            /*
+             * Ask to connect again straight away.
+             *
+             * A connect request outlives the peripheral going away -
+             * CoreBluetooth simply completes it whenever the device comes
+             * back - which is precisely the behaviour wanted for a panel that
+             * gets unplugged or power cycled.
+             *
+             * This is also where reconnection was broken before. The old code
+             * only rescanned, and the scan handler ignored anything already
+             * held in `self.peripheral`, which is never cleared. So unless the
+             * user had explicitly chosen a panel, the app would sit at
+             * "Searching" forever after the first disconnect and never come
+             * back on its own.
+             */
+            state = .searching
+            central.connect(peripheral)
+
+            // Keep scanning as well, so the picker still notices other panels.
             startScan()
         }
     }
@@ -287,16 +383,25 @@ extension BLEClient: CBPeripheralDelegate {
                 return
             }
 
+            // Tracked so onConnected fires on a real transition only. Were it
+            // to run again on an already-live link, it would re-send the status
+            // and restart the reveal animation for no reason.
+            let wasConnected = (state == .connected)
+
             rx = characteristic
             state = .connected
+
+            // Nothing left to look for, and continuing to scan while connected
+            // provokes repeated connect attempts. See startScan().
+            central.stopScan()
 
             // Learn the panel's actual brightness instead of assuming a value.
             peripheral.readValue(for: characteristic)
 
-            let queued = pending
-            pending.removeAll()
-            for command in queued {
-                write(command, to: peripheral, characteristic: characteristic)
+            // Let the controller restore what the panel should be showing. The
+            // panel boots blank after a power cycle and cannot know.
+            if !wasConnected {
+                onConnected?()
             }
         }
     }

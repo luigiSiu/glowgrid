@@ -55,6 +55,9 @@ struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+            if !ble.isConnected {
+                offlineNote
+            }
             Divider()
             statusSection
             Divider()
@@ -93,6 +96,15 @@ struct MenuContent: View {
                 .font(.system(size: 12, weight: .medium))
             Spacer()
         }
+    }
+
+    /// Shown only while disconnected, to explain the greyed-out controls and to
+    /// promise that a status chosen now is not being thrown away.
+    private var offlineNote: some View {
+        Text("Pick a status anyway - it will be applied when the panel is back.")
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var statusSection: some View {
@@ -169,6 +181,13 @@ struct MenuContent: View {
             }
             .buttonStyle(.bordered)
         }
+        /*
+         * Brightness and messages act on the panel immediately or not at all,
+         * so they are disabled while it is unreachable rather than accepting
+         * input that goes nowhere. Statuses stay enabled on purpose: the app
+         * remembers your choice and applies it the moment the panel returns.
+         */
+        .disabled(!ble.isConnected)
     }
 
     private var messageSection: some View {
@@ -200,6 +219,7 @@ struct MenuContent: View {
                 .buttonStyle(.link)
             }
         }
+        .disabled(!ble.isConnected)
     }
 
     private var panelSection: some View {
@@ -221,12 +241,22 @@ struct MenuContent: View {
             }
             .font(.system(size: 12))
 
-            if ble.hasPreferredPanel {
-                Button("Forget this panel") {
-                    ble.forgetPanel()
+            HStack(spacing: 10) {
+                // Scanning stops once connected, so finding a second panel has
+                // to be asked for rather than happening continuously.
+                Button("Rescan") {
+                    ble.rescan()
                 }
                 .font(.system(size: 11))
                 .buttonStyle(.link)
+
+                if ble.hasPreferredPanel {
+                    Button("Forget this panel") {
+                        ble.forgetPanel()
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.link)
+                }
             }
         }
     }

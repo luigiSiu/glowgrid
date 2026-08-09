@@ -49,12 +49,26 @@ final class StatusController: ObservableObject {
      */
     private var applyNextImmediately = false
 
+    /*
+     * Whether the user has chosen anything yet in this session.
+     *
+     * Until they have, reconnecting must NOT push a status. The panel may be
+     * showing something set from the CLI, or left over from before the app
+     * started, and stamping `off` over it merely because the app has not been
+     * told otherwise would be worse than doing nothing.
+     */
+    private var hasApplied = false
+
     private let pollInterval: TimeInterval = 3.0
 
     init(ble: BLEClient, calendar: CalendarSensor) {
         self.ble = ble
         self.calendar = calendar
         self.useCalendar = UserDefaults.standard.bool(forKey: calendarKey)
+
+        ble.onConnected = { [weak self] in
+            self?.restoreAfterReconnect()
+        }
     }
 
     // MARK: - User actions
@@ -150,8 +164,29 @@ final class StatusController: ObservableObject {
 
     // MARK: - Output
 
+    /*
+     * Push the status again now that the panel is reachable.
+     *
+     * The panel keeps its brightness across a power cycle - that is saved to
+     * NVS - but not its status, which it has no way of knowing. So after
+     * unplugging it, the app and the panel disagree, and the app is the one
+     * holding the truth.
+     *
+     * The status is re-sent unconditionally rather than going through poll(),
+     * because poll() skips sending when the status it computes matches what the
+     * app already believes - which after a power cycle is exactly the case that
+     * needs sending, and precisely why the panel used to stay dark until you
+     * picked a status by hand. Automatic mode still catches any real change on
+     * its next tick.
+     */
+    private func restoreAfterReconnect() {
+        guard hasApplied else { return }
+        ble.send(status)
+    }
+
     private func apply(_ new: Status) {
         status = new
+        hasApplied = true
         ble.send(new)
     }
 }
