@@ -5,11 +5,13 @@ interrupted. It follows your Mac automatically — camera on means you are in a
 meeting, microphone on means you are busy — and you can override it from the
 menu bar at any time.
 
-<!-- Add docs/photos/hero.jpg and uncomment:
-![glowgrid on a desk, showing a green tick](docs/photos/hero.jpg)
--->
+[![glowgrid in a photo frame, showing available, busy, in a meeting and away](docs/media/states.jpg)](docs/media/frame-demo.mp4)
 
-Built from about €15 of parts in an evening, with no soldering and no Xcode.
+Available, busy, in a meeting, away — behind the glass of a €6 photo frame.
+▶ **[10-second clip of it cycling through the states](docs/media/frame-demo.mp4)**
+
+About **€27 of parts** and an evening. No Xcode, no 3D printer, no breadboard,
+and soldering is optional.
 
 ## What it shows
 
@@ -21,30 +23,44 @@ Built from about €15 of parts in an evening, with no soldering and no Xcode.
 | Away | Z | orange |
 | Off | nothing | — |
 
-<!-- Add docs/photos/panel-states.jpg and uncomment:
-![the four icons](docs/photos/panel-states.jpg)
--->
-
 Icons animate in from the centre, then breathe gently so the panel looks alive
 rather than merely switched on. It can also scroll a short message.
 
 ## What you need
 
+These are the exact parts this build used, at what they actually cost in Spain.
+Nothing here is exotic or hard to substitute.
+
 **Hardware**
 
-- An **ESP32 dev board**. This project was built with an ESP32-WROOM-32
-  (ESP32-D0WD-V3) with a CH340 USB chip — the ubiquitous ~€6 clone. Any ESP32
-  with Bluetooth will do.
-- A **WS2812B 8×8 LED matrix** (also sold as NeoPixel). This build used a
-  BTF-LIGHTING WS2812B ECO 8×8, 8×8 cm flexible board. Roughly €8.
-- **3 female-to-female dupont jumper leads**.
-- A **USB data cable** for the ESP32. Charge-only cables will not work and give
-  no useful error — the port simply never appears.
+- **ESP32 dev board** — [Diymore ESP32 NodeMCU, USB-C, CH340](https://www.amazon.es/dp/B0D9BTQRYT)
+  — **€16 for a two-pack**, so about €8 for the one you need. Any ESP32 with
+  Bluetooth works; there is nothing special about this one beyond being cheap
+  and having USB-C. The pack of two is worth having anyway — a known-good spare
+  is how you tell a wiring fault from a dead board.
+- **WS2812B 8×8 LED matrix** — [BTF-LIGHTING WS2812B ECO, 64 pixels](https://www.amazon.es/dp/B088W62171)
+  — **€13**. 80 × 80 mm, flexible, adhesive backed. Also sold as NeoPixel.
+- **3 female-to-female dupont jumper leads** — a euro or two, and often already
+  in the drawer.
+- **A USB-C data cable.** Charge-only cables do not work and give no useful
+  error whatsoever: the serial port simply never appears.
+- **A photo frame**, if you want it to look finished — **under €6** from any
+  cheap homeware shop. Not every frame will do; see
+  [step 6](#6-put-it-in-a-photo-frame) for what to check before buying.
+
+**Optional**
+
+- **A USB power bank**, to run it away from the Mac —
+  [Kuulaa 4500 mAh USB-C](https://www.amazon.es/dp/B0G1Y7CJ13) — **€17 for two**,
+  about €8.50 each. Read
+  [Powering it from a USB battery](#powering-it-from-a-usb-battery) before buying
+  any bank, because capacity is not the specification that matters here.
 
 **Software** — a Mac running macOS 13 or later, and Xcode Command Line Tools
 (`xcode-select --install`) for the Swift compiler.
 
-That is the whole bill of materials. No soldering, no breadboard, no resistors.
+**About €27 for one working unit**, or €36 with a battery. No resistors, no
+level shifter, no breadboard, no 3D printer.
 
 ## Read this before wiring
 
@@ -119,48 +135,55 @@ upload starts and release once it begins writing. Some clones do not auto-reset.
 
 Unplug USB first.
 
-| ESP32 pin | Wire  | Panel |
-|---|---|---|
-| `VIN` | red | `5V` |
-| `GND` | white | `GND` |
-| `D13` | green | `DIN` |
+| ESP32 pin | Panel pad |
+|---|---|
+| `VIN` | `5V` |
+| `GND` | `GND` |
+| `D13` | `DIN` |
 
-`D13` on the silkscreen is `GPIO13`, which is what the firmware uses.
+Three wires. That is the entire circuit. `D13` on the silkscreen is `GPIO13`,
+which is what the firmware drives.
 
-<!-- Add docs/photos/wiring.jpg and uncomment:
-![the three leads in VIN, GND and D13](docs/photos/wiring.jpg)
--->
+![three jumper leads in VIN, GND and D13 on the ESP32](docs/media/esp32-wiring.jpg)
+
+Ignore the colours of your jumper leads — the ones above are red, orange and
+yellow and mean nothing at all. What matters is which pin each lands on, and
+the silkscreen is legible in that photo: `VIN`, `GND` and `D13` are the first
+three pins along that edge.
 
 **The panel has three sets of wires and only one is the input.** Getting this
 wrong is the most common way to end up with a dead-looking panel:
 
-1. Arrow pointing one way, labelled `5V`/`GND`/`DOUT`, male connector — the
-   **output**, for chaining a second panel. Not used.
+![the back of the panel, with all three wire sets and their labels](docs/media/panel-connectors.jpg)
+
+1. `5V`/`GND`/`DOUT`, male connector, arrow one way — the **output**, for
+   chaining a second panel. Not used.
 2. Two bare `5V`/`GND` wires with no connector — power injection, for an
    external supply. Not used here.
-3. Arrow pointing the other way, labelled `5V`/`GND`/`DIN`, female connector —
-   the **input. This is the one.**
+3. `5V`/`GND`/`DIN`, female connector, arrow the other way — the **input. This
+   is the one.**
 
-The rule: data goes *in* at `DIN`; `DOUT` is an exit. The arrows point opposite
-ways because the LED chain snakes back and forth row by row.
+Each set is labelled on the PCB, as you can see above. The rule: data goes *in*
+at `DIN`; `DOUT` is an exit. The arrows point opposite ways because the LED
+chain snakes back and forth row by row.
 
-<!-- Add docs/photos/connectors.jpg and uncomment:
-![the three wire sets on the back of the panel](docs/photos/connectors.jpg)
--->
-
-Colours on the JST pigtail were verified by tracing on this build: red = 5 V,
-white = GND, green = DIN. Adapter colours are not guaranteed in general, so
-check yours by slot position or with a continuity test rather than trusting
-the colour alone.
+Colours on the panel's own pigtail were verified by tracing on this build:
+red = 5 V, white = GND, green = DIN. Pigtail colours are not guaranteed across
+batches, so check yours against the printed labels rather than trusting colour.
 
 When you hold two mated connectors face to face, the colour order *looks*
 reversed. That is a mirror effect, not a fault.
 
-The bare wire ends push into the dupont sockets as a friction fit, so twist
-each end tightly and keep the three joints apart. Intermittent data shows up as
-flicker or wrong colours; intermittent power shows up as the panel resetting.
-Suspect these joints first. Tinning the ends with solder makes them far more
-reliable if you have an iron.
+**On soldering.** You do not have to solder anything. The pigtail ends push
+straight into female dupont leads, and this project ran that way for weeks. It
+is a friction fit though, so twist each bare end tightly, push it fully home,
+and keep the three joints apart. Intermittent data shows up as flicker or wrong
+colours; intermittent power shows up as the panel resetting — suspect these
+joints first.
+
+If you do own an iron, soldering the pigtail to a set of jumper leads (which is
+what the photo above shows) takes ten minutes and removes that entire category
+of fault. It is the one upgrade that makes the build feel less fragile.
 
 ### 4. Flash the firmware
 
@@ -171,6 +194,18 @@ reliable if you have an iron.
 That builds and uploads `status_ble`, the sketch you actually want. The panel
 should light up dim, and the board starts advertising over Bluetooth as
 `glowgrid`.
+
+![the bare panel lit with a green tick, running from a USB power bank](docs/media/bench-test.jpg)
+
+First light. Two things in that photo are worth noticing, because each is the
+point of a later step:
+
+- It is running from a **USB power bank**, not the Mac. The panel does not care
+  where its 5 V comes from — see
+  [Powering it from a USB battery](#powering-it-from-a-usb-battery).
+- Bare, the LEDs read as **64 separate dots** with visible halos. The shape is
+  legible, but it looks like a circuit board, because it is one. Step 6 is what
+  fixes that.
 
 ### 5. Install the Mac app
 
@@ -187,9 +222,52 @@ Install to `/Applications` before turning on "Launch at login" — macOS records
 the app's *location* in the login item, so one registered from a build
 directory breaks the moment you rebuild.
 
-<!-- Add docs/photos/menu.png and uncomment:
-![the app panel](docs/photos/menu.png)
--->
+▶ **[Watch the app driving the panel](docs/media/app-demo.mp4)** — 80 seconds of
+picking statuses by hand, then leaving it on Automatic and letting the
+microphone switch it to *busy* on its own.
+
+### 6. Put it in a photo frame
+
+Optional, and the best improvement per euro in the entire project. A bare panel
+on a desk looks like a project. The same panel behind glass with a diffuser
+looks like something you bought.
+
+![an empty wooden photo frame with a white mat](docs/media/frame-empty.jpg)
+
+**Under €6 from a cheap homeware shop.** Not every frame works, so check for:
+
+- **A mat** — the white card border. This is the part that does the visual work:
+  it hides the panel's edges, its dark PCB and the wiring, so all you see is an
+  icon floating in white. A frame without a mat shows the whole board.
+- **Depth.** There must be room behind the glass for the panel plus a few
+  millimetres of air. Deep-rebate or "box" frames are ideal.
+- **A fold-out stand**, so you do not have to make one.
+- **An MDF backer** you do not mind drilling.
+
+Then three holes in the backer — one for the wires to reach the back, and two
+for screws to hold the ESP32:
+
+![the ESP32 screwed to the frame backer, wires passing through](docs/media/frame-assembly.jpg)
+
+And the part that actually matters: **two sheets of plain white paper between
+the panel and the glass.** That is the diffuser. Free, and it works — each LED
+spreads into a soft round dot instead of a hard bright point, and when the panel
+is off the frame just looks like an empty frame.
+
+![the finished back, kickstand out, USB-C plugged in](docs/media/frame-back.jpg)
+
+The USB-C socket ends up pointing down and slightly outward, so the cable leaves
+tidily behind the stand.
+
+Two things learned doing this:
+
+- **Diffusion costs brightness.** It always does. You will probably want a step
+  or two more after fitting the paper — `b+` in the app, or
+  `glowgrid --brighter`. There is plenty of headroom below the cap of 60.
+- **The air gap matters more than the material.** The paper sits against the
+  glass with the panel a few millimetres behind it, and that small gap is what
+  turns points of light into round dots. Press any diffuser flat against the
+  LEDs instead and you get hotspots with muddy halos.
 
 ## Using it
 
@@ -381,24 +459,33 @@ registers as microphone activity and shows you as busy.
 
 ## Powering it from a USB battery
 
-The obvious next step is to cut the panel loose from the Mac and run it from a
-USB power bank. The wiring does not change at all — the bank simply replaces
-the Mac as the USB power source. One thing decides whether it works:
+Cutting it loose from the Mac is what makes it feel like an appliance rather
+than a peripheral, and it needs no changes at all: the bank simply replaces the
+Mac as the USB power source. The bench photo in step 4 is running that way.
+
+One specification decides whether a given bank is suitable, and it is not
+capacity:
 
 - **Current is not the problem.** The ESP32 with BLE averages 80–150 mA, and
   the panel at these brightness levels adds only tens of milliamps.
 - **Auto-shutoff is the problem.** Many power banks switch themselves off when
   draw falls below roughly 50–100 mA, assuming nothing is plugged in. This load
-  sits right around that threshold. **Buy a bank that advertises a low-current,
-  trickle or "small device" mode** — this is the single thing that decides
-  whether the idea works.
-- **Runtime is fine.** A 10,000 mAh bank gives roughly 6,000–7,000 mAh usable
-  after conversion losses, so at ~150 mA you get well over a day.
+  sits right around that threshold, so some banks will cut out after a few
+  minutes. Look for one advertising a low-current, trickle or "small device"
+  mode — this is the single thing that decides whether the idea works.
+- **Runtime is not the problem either.** Even a small 4500 mAh bank is roughly
+  3,000 mAh usable after conversion losses — a full day at ~150 mA. A
+  10,000 mAh bank is several days.
 - **Trade-off:** on battery there is no serial console, and reflashing means
   going back to the Mac.
 
-If a bank does cut out on you, raising the brightness is the crude fix — it
-pushes draw above the cutoff, and looks better anyway.
+This build used [Kuulaa 4500 mAh USB-C banks](https://www.amazon.es/dp/B0G1Y7CJ13),
+€17 for two, which are small enough to sit behind the frame rather than beside
+it. If yours cuts out after a few minutes, that is the auto-shutoff above and
+not a fault in your wiring.
+
+Raising the brightness is the crude fix — it pushes draw above the cutoff, and
+looks better anyway.
 
 ## Sharing it with someone else
 
@@ -431,6 +518,8 @@ mac-cli/            optional command line tools
   media-sensor/     the detector, as a standalone Swift binary
 
 flash.sh            build and upload a sketch, finding the port
+
+docs/media/         the photos and clips used by this guide
 
 blink_test/         step 0  onboard LED only, no wiring
 matrix_test/        step 1  first light on the panel
