@@ -125,11 +125,23 @@ anything else. Failing that, install the CH340 driver:
 brew install --cask wch-ch34x-usb-serial-driver
 ```
 
-then reboot and allow the kernel extension in System Settings › Privacy &
-Security.
+then **restart your Mac** — not the ESP32 — and allow the kernel extension in
+System Settings › Privacy & Security. This is a driver install, so it is the
+Mac that needs the reboot.
 
-**Upload hangs at `Connecting........`?** Hold the **BOOT** button as the
-upload starts and release once it begins writing. Some clones do not auto-reset.
+**Upload hangs at `Connecting........`?** The board has two small buttons. Hold
+**BOOT** as the upload starts, and release it once the dots give way to writing.
+Some clones will not put themselves into the bootloader on their own.
+
+If holding BOOT alone is not enough, do it by hand: **hold BOOT, tap EN, release
+BOOT**, then start the upload. The board is now parked in the bootloader waiting
+for it.
+
+Which button is which, on the board pictured in step 3: **EN** is at the top,
+next to the `VIN` end of the header. **BOOT** is at the bottom, beside the USB-C
+socket. `EN` is *enable* — it simply resets the ESP32, and on its own it will not
+get you into the bootloader. Worth knowing that at an angle the `EN` silkscreen
+reads convincingly as `FN`.
 
 ### 3. Wire the panel
 
@@ -375,10 +387,21 @@ status=busy brightness=10 mode=status
 Unrecognised commands are ignored rather than rejected, so a typo does nothing
 and reports nothing.
 
-Those are the Nordic UART Service UUIDs. Nothing here is UART, but borrowing a
-well-known service means generic BLE apps like nRF Connect or LightBlue
-recognise the device — which is very useful for testing before you have written
-any client code.
+Those long hex strings are the **Nordic UART Service** UUIDs, and they are
+borrowed on purpose.
+
+Every BLE service and characteristic is identified by a UUID, and you are free
+to invent your own — but an invented UUID means nothing to anyone else, so no
+existing app knows what to do with it. Nordic's serial-port service is a de
+facto standard that generic BLE tools already recognise. By reusing its UUIDs,
+phone apps like **nRF Connect** or **LightBlue** show glowgrid as a device with
+a text box you can type `busy` straight into — with no client code written at
+all.
+
+That is exactly how this protocol was tested before a line of Mac code existed,
+and it is still the fastest way to check whether a problem is in the firmware or
+in the app. Nothing here is really a UART; the name is inherited along with the
+UUIDs.
 
 Brightness is saved to the ESP32's non-volatile storage and restored on boot,
 and only written when it actually changes, since flash has finite write cycles.
