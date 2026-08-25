@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Entitlements for the hardened runtime, which release.sh turns on and
+        notarisation insists upon.
+
+        The hardened runtime blocks access to protected resources by default,
+        so anything the app genuinely touches has to be declared here. The
+        Info.plist usage strings are still required as well: the entitlement
+        says "this app is allowed to ask", the usage string is what the user
+        actually reads in the prompt. Both, or no permission dialog.
+    -->
+
+    <!-- CoreBluetooth. Without this the panel is simply never found. -->
+    <key>com.apple.security.device.bluetooth</key>
+    <true/>
+
+    <!-- EventKit, and only if the calendar option is switched on. -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+
+    <!--
+        Deliberately absent: camera and audio-input.
+
+        The app watches whether the camera and microphone are *in use* by
+        reading device properties through CoreMediaIO and CoreAudio. It never
+        opens a stream, so it needs no capture permission — and asking for one
+        would put a microphone indicator in the menu bar and a scary prompt in
+        front of the user for a capability the app does not want.
+
+        Not sandboxed either. The App Sandbox is a requirement of the Mac App
+        Store, not of notarisation, and this app is distributed as a download.
+    -->
+</dict>
+</plist>
