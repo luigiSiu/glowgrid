@@ -572,7 +572,7 @@ class ServerCallbacks : public BLEServerCallbacks {
  * kinds of message unambiguous:
  *
  *   available | busy | meeting | away | off   set status
- *   b:<0-255>                                 set brightness
+ *   b:<1-60>                                  set brightness, clamped
  *   b+ / b-                                   step brightness
  *   t:<text>                                  scroll a message
  *   clear                                     back to showing the status

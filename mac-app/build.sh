@@ -79,6 +79,11 @@ cp "$HERE/Resources/Info.plist" "$APP/Contents/Info.plist"
 # Ad-hoc signature. Unsigned bundles get their Bluetooth permission forgotten
 # between builds, so macOS re-prompts every single launch. Signing (even with
 # no identity) gives the bundle a stable identity and the grant sticks.
+#
+# Ad-hoc is right for this script and wrong for a release: it is instant and
+# needs no network, but Gatekeeper will refuse the result on any Mac other than
+# this one. Releases go through release.sh, which signs with a Developer ID
+# certificate and has the build notarised.
 codesign --force --sign - "$APP" >/dev/null 2>&1 || {
   echo "warning: ad-hoc codesign failed; you may be re-prompted for Bluetooth each launch" >&2
 }

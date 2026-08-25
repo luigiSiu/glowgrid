@@ -13,6 +13,10 @@ Available, busy, in a meeting, away — behind the glass of a €6 photo frame.
 About **€27 of parts** and an evening. No Xcode, no 3D printer, no breadboard,
 and soldering is optional.
 
+The Mac app is a
+**[signed download](https://github.com/luigiSiu/glowgrid/releases)** — double
+click and it runs. The panel you build yourself, and this README is the guide.
+
 ## What it shows
 
 | Status | Icon | Colour |
@@ -52,12 +56,16 @@ Nothing here is exotic or hard to substitute.
 
 - **A USB power bank**, to run it away from the Mac —
   [Kuulaa 4500 mAh USB-C](https://www.amazon.es/dp/B0G1Y7CJ13) — **€17 for two**,
-  about €8.50 each. Read
+  about €8.50 each. These are tested on this build and run it without
+  complaint, but read
   [Powering it from a USB battery](#powering-it-from-a-usb-battery) before buying
-  any bank, because capacity is not the specification that matters here.
+  any bank: capacity is not the specification that matters, and going wireless
+  costs you Bluetooth range.
 
-**Software** — a Mac running macOS 13 or later, and Xcode Command Line Tools
-(`xcode-select --install`) for the Swift compiler.
+**Software** — a Mac running macOS 13 or later. The app itself needs nothing
+installed: it is a signed, notarised download. Xcode Command Line Tools
+(`xcode-select --install`) are only needed if you want to compile the app
+yourself, and `arduino-cli` for the firmware — step 1 covers that.
 
 **About €27 for one working unit**, or €36 with a battery. No resistors, no
 level shifter, no breadboard, no 3D printer.
@@ -221,9 +229,12 @@ point of a later step:
 
 ### 5. Install the Mac app
 
-Either download the signed build from
-[Releases](https://github.com/luigiSiu/glowgrid/releases) and drag it to
-`/Applications`, or build it yourself:
+Download `Glowgrid-<version>.zip` from
+[Releases](https://github.com/luigiSiu/glowgrid/releases), unzip it and drag the
+app to `/Applications`. It is signed and notarised, so it opens with a double
+click like anything else you download.
+
+Or build it from source, which takes one command:
 
 ```sh
 cd mac-app
@@ -438,6 +449,10 @@ the state characteristic. This cost real time here, twice.
 **Bluetooth permission was granted but the app still cannot connect.** Quit and
 relaunch; macOS occasionally needs it after a permission change.
 
+**It was reliable across the room on USB, and now drops out on battery.** Not a
+fault — a power bank pressed against the board costs you radio range. See
+[Powering it from a USB battery](#powering-it-from-a-usb-battery).
+
 ## How it works
 
 ### Panel layout
@@ -508,11 +523,52 @@ capacity:
 
 This build used [Kuulaa 4500 mAh USB-C banks](https://www.amazon.es/dp/B0G1Y7CJ13),
 €17 for two, which are small enough to sit behind the frame rather than beside
-it. If yours cuts out after a few minutes, that is the auto-shutoff above and
-not a fault in your wiring.
+it. **They are now tested and they work smoothly** — no auto-shutoff, no
+cutting out, the panel simply stays lit. If yours does die after a few minutes,
+that is the auto-shutoff above and not a fault in your wiring. Raising the
+brightness is the crude fix, since it pushes draw above the cutoff, and it looks
+better anyway.
 
-Raising the brightness is the crude fix — it pushes draw above the cutoff, and
-looks better anyway.
+### The battery costs you Bluetooth range
+
+This was the surprise, and it is the one real downside of going wireless.
+
+On USB power from the Mac, the panel held its connection from **more than two
+metres away with a wall in between**. Running from the bank tucked behind the
+frame, it wants to be **within about a metre, in sight of the Mac**, or the app
+starts losing it.
+
+The likely reason is a nice lesson in why radio is not like wiring. The ESP32's
+2.4 GHz antenna is not a component you can point at — it is a copper trace at
+one end of the board, and it is tuned assuming empty space around it. Two things
+change when a battery is strapped to it:
+
+- **Detuning.** A lithium pack is a large conductive slab in a metal-ish shell.
+  Put it in the antenna's near field and it becomes part of the antenna,
+  shifting its resonance away from 2.4 GHz and absorbing energy that should be
+  radiating.
+- **Noise.** The switching regulator that steps the cell up to 5 V is a small
+  broadband transmitter. Its harmonics reach into the same band Bluetooth uses,
+  so the noise floor at the receiver goes up while the signal goes down.
+
+Worth trying before accepting the shorter range:
+
+- **Move the bank away from the antenna end** of the board — the far corner of
+  the frame is better than directly behind it.
+- **Leave a couple of centimetres of air** between pack and board. Even a small
+  gap is a real improvement, because near-field effects fall off fast.
+- **Do not put the pack between the panel and the Mac.** Give the antenna a
+  clear line to the computer.
+- **Longer USB cable, bank further away** — the cheapest fix, at the cost of a
+  cable to hide.
+
+Honest caveat: this was observed by moving the thing around a room and watching
+the app's connection dot, not measured with a spectrum analyser. The distances
+are what this build does in this flat, with these walls. Treat them as the shape
+of the problem rather than as specifications.
+
+If you want the range back, keep it on USB. The frame ends up near the desk
+anyway, which is where you want to see it.
 
 ## Sharing it with someone else
 
@@ -572,6 +628,44 @@ it was still valid. And changing signing identity resets the app's permission
 grants, so the first launch of a newly signed build re-prompts for Bluetooth
 even on the machine that built it. Expected, not a bug.
 
+### Version numbers, and where they live
+
+One `MAJOR.MINOR.PATCH` number for the whole project, kept in three places that
+have to agree:
+
+- **`mac-app/Resources/Info.plist`** — `CFBundleShortVersionString`. What the
+  app reports to macOS, what Finder shows in Get Info, and what names the zip.
+- **`pyproject.toml`** — the repository's own version, which is what Python
+  tooling reads.
+- **The git tag**, `v0.1.0`, which is what the GitHub release hangs off.
+
+Three copies is one more than anybody wants, and there is no clever fix worth
+having here: each is read by a different toolchain that cannot see the other
+two. A generator would be more machinery than the problem deserves, so instead
+it is a checklist — and [CHANGELOG.md](CHANGELOG.md) is where the actual story
+of what changed lives.
+
+`CFBundleVersion` next to it is a different thing: a build counter, not a
+version. It only has to increase, and only really matters to the App Store.
+
+Cutting a release, in order:
+
+```sh
+# 1. bump Info.plist and pyproject.toml, write the CHANGELOG entry
+# 2. build the signed, notarised artefact
+cd mac-app && ./release.sh
+
+# 3. commit, tag, push
+git tag v0.1.0 && git push origin v0.1.0
+
+# 4. publish, attaching the zip release.sh produced
+gh release create v0.1.0 mac-app/build/dist/Glowgrid-0.1.0.zip
+```
+
+Build the artefact *before* tagging, not after. If notarisation fails you want
+to find out while the tag does not exist yet, because a pushed tag that points
+at a release you could not build is a small mess to undo.
+
 ## Repository layout
 
 ```
@@ -591,6 +685,9 @@ mac-cli/            optional command line tools
   media-sensor/     the detector, as a standalone Swift binary
 
 flash.sh            build and upload a sketch, finding the port
+
+CHANGELOG.md        what changed in each release, and why
+pyproject.toml      the repository version, for the Python side
 
 docs/media/         the photos and clips used by this guide
 
@@ -638,6 +735,15 @@ Things that cost time here, recorded so they cost you less:
   the `.window` style. And because a menu-bar-only app is an *accessory* app
   whose windows cannot become key, it has to activate itself when the panel
   opens or the text field ignores every keystroke.
+- **A power bank strapped to the board costs you Bluetooth range**, dropping a
+  comfortable two-metres-through-a-wall down to about one metre in sight. The
+  battery detunes the antenna trace and its regulator raises the noise floor.
+  Nothing about the code changed; the radio's surroundings did.
+- **Three certificate types are called "distribution" in spirit and only one
+  works.** *Apple Development* covers your own machines, *Apple Distribution*
+  is the Mac App Store, and *Developer ID Application* — a separate type in the
+  same portal — is the one that lets a download open on a stranger's Mac.
+  Signing with the wrong one fails identically to not signing at all.
 
 ## Licence
 
