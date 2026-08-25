@@ -221,6 +221,10 @@ point of a later step:
 
 ### 5. Install the Mac app
 
+Either download the signed build from
+[Releases](https://github.com/luigiSiu/glowgrid/releases) and drag it to
+`/Applications`, or build it yourself:
+
 ```sh
 cd mac-app
 ./build.sh -i
@@ -512,17 +516,61 @@ looks better anyway.
 
 ## Sharing it with someone else
 
-The app is **ad-hoc signed**, not notarised, because notarisation requires a
-paid Apple Developer account. On your own Mac this is invisible. On someone
-else's, Gatekeeper will refuse to open it, and the only honest advice is to
-build it themselves from source — it takes one command.
+The build attached to each [release](https://github.com/luigiSiu/glowgrid/releases)
+is signed with a Developer ID certificate and notarised by Apple, so it opens
+with a double click on any Mac — no right-click-Open, no scary dialog. It is a
+universal binary, so Apple Silicon and Intel both work. First launch still asks
+for Bluetooth permission, which is the app doing what it says on the tin.
 
-If they insist on a copy of the bundle, right-click the app and choose **Open**
-rather than double-clicking; that offers an override the normal launch path
-does not. They will also need to grant Bluetooth permission by hand.
+What `build.sh` produces is **ad-hoc signed** and deliberately different. It is
+fine on the machine that built it and Gatekeeper will refuse it anywhere else,
+which is exactly why release builds go through the script below instead.
 
-The binary is universal (Apple Silicon and Intel), so at least architecture is
-not an obstacle.
+### Cutting a release
+
+```sh
+cd mac-app
+./release.sh                  # build, sign, notarise, staple, zip
+./release.sh --skip-notarize  # signing only, for when you are changing the script
+```
+
+The output lands in `mac-app/build/dist/Glowgrid-<version>.zip`, ready to attach
+to a GitHub release.
+
+Gatekeeper wants three separate things, and missing any one of them produces the
+same unhelpful "Apple could not verify this app is free of malware":
+
+1. **A Developer ID Application certificate.** Not *Apple Development* (your own
+   machines only) and not *Apple Distribution* (the Mac App Store). Distinct
+   certificate type, same portal. Create it in Xcode › Settings › Accounts ›
+   your team › Manage Certificates › + › Developer ID Application.
+2. **The hardened runtime and a secure timestamp.** The notary service rejects
+   anything without both. The hardened runtime also means the resources the app
+   uses have to be declared in `Glowgrid.entitlements` — Bluetooth and, if you
+   turn it on, calendar. Camera and microphone are *not* declared, because the
+   app only reads whether those devices are in use and never opens a stream.
+3. **A notarisation ticket, stapled.** Uploading gets you a verdict; stapling
+   writes it into the bundle. Skip the stapling and macOS has to phone Apple on
+   first launch, so anyone offline sees the warning on a perfectly good app.
+
+One-time setup for notarisation: create an app-specific password at
+[appleid.apple.com](https://appleid.apple.com) (Sign-In and Security ›
+App-Specific Passwords), then store it in your keychain once:
+
+```sh
+xcrun notarytool store-credentials glowgrid-notary \
+  --apple-id you@example.com \
+  --team-id YOURTEAMID
+```
+
+After that the password lives in the keychain and never appears in a script, a
+shell history or a CI log.
+
+Two things worth knowing. The secure timestamp is why the app keeps launching
+after the certificate eventually expires — the signature is provably from when
+it was still valid. And changing signing identity resets the app's permission
+grants, so the first launch of a newly signed build re-prompts for Bluetooth
+even on the machine that built it. Expected, not a bug.
 
 ## Repository layout
 
@@ -533,7 +581,9 @@ status_ble/         the firmware that runs on the board  <-- the real one
 mac-app/            the menu bar app (Swift, no Xcode project)
   Sources/          BLE client, sensors, status logic, UI
   icon/             the app icon, drawn by code
-  build.sh          compile / install
+  build.sh          compile / install            <-- the dev loop
+  release.sh        sign, notarise, staple, zip  <-- cutting a release
+  Glowgrid.entitlements   what the hardened runtime is allowed to touch
 
 mac-cli/            optional command line tools
   glowgrid.py       set status, brightness or text over BLE
