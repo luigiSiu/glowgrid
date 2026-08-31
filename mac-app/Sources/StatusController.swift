@@ -18,7 +18,7 @@ import Combine
 @MainActor
 final class StatusController: ObservableObject {
     @Published private(set) var status: Status = .off
-    @Published private(set) var mode: ControlMode = .manual
+    @Published private(set) var mode: ControlMode
 
     /*
      * Whether the calendar is consulted as well as the hardware. Off unless
@@ -32,7 +32,31 @@ final class StatusController: ObservableObject {
     private let calendar: CalendarSensor
     private var timer: Timer?
 
-    private let calendarKey = "useCalendar"
+    /*
+     * UserDefaults keys.
+     *
+     * Static because init reads them before `mode` has been assigned, and
+     * Swift forbids touching `self` until every stored property is
+     * initialised.
+     */
+    private static let calendarKey = "useCalendar"
+
+    /*
+     * The mode is remembered, and defaults to automatic when nothing has been
+     * stored yet.
+     *
+     * Automatic is the point of the app - a status light you have to remember
+     * to update is just a worse version of telling people you are busy. Anyone
+     * who wanted to set it by hand would not need the Mac involved at all. So a
+     * fresh install starts following the camera and microphone immediately,
+     * rather than sitting in manual doing nothing until the menu is opened.
+     *
+     * It is remembered rather than forced on every launch because the opposite
+     * is worse: choosing Manual, quitting, and finding the app back in
+     * Automatic tomorrow would be exactly the invisible state change the
+     * explicit modes exist to avoid.
+     */
+    private static let modeKey = "controlMode"
 
     /*
      * Detection is debounced: a new reading must be seen twice in a row before
@@ -50,12 +74,18 @@ final class StatusController: ObservableObject {
     private var applyNextImmediately = false
 
     /*
-     * Whether the user has chosen anything yet in this session.
+     * Whether a status has been decided yet in this session, by the user or by
+     * detection.
      *
-     * Until they have, reconnecting must NOT push a status. The panel may be
+     * Until one has, reconnecting must NOT push a status. The panel may be
      * showing something set from the CLI, or left over from before the app
      * started, and stamping `off` over it merely because the app has not been
      * told otherwise would be worse than doing nothing.
+     *
+     * In automatic mode this goes true within a moment of launch, which is the
+     * intended trade: automatic means the app owns the status, so it will
+     * overwrite whatever the CLI last set. Manual mode keeps the old caution,
+     * since nothing has been decided until something is picked.
      */
     private var hasApplied = false
 
@@ -64,10 +94,26 @@ final class StatusController: ObservableObject {
     init(ble: BLEClient, calendar: CalendarSensor) {
         self.ble = ble
         self.calendar = calendar
-        self.useCalendar = UserDefaults.standard.bool(forKey: calendarKey)
+        self.useCalendar = UserDefaults.standard.bool(forKey: Self.calendarKey)
+
+        // Absent, or unreadable because someone edited the plist by hand:
+        // automatic either way.
+        let stored = UserDefaults.standard.string(forKey: Self.modeKey)
+        self.mode = stored.flatMap(ControlMode.init(rawValue:)) ?? .automatic
 
         ble.onConnected = { [weak self] in
             self?.restoreAfterReconnect()
+        }
+
+        /*
+         * Detection starts here rather than waiting for the menu to be opened.
+         * The panel is usually connected a second or two later, and a status
+         * decided while disconnected is not lost: the send is dropped, but
+         * onConnected pushes the current status as soon as the panel is
+         * reachable.
+         */
+        if mode == .automatic {
+            beginAutomatic()
         }
     }
 
@@ -76,6 +122,7 @@ final class StatusController: ObservableObject {
     /// Called when a status is chosen from the menu.
     func selectManual(_ status: Status) {
         mode = .manual
+        persistMode()
         stopPolling()
         apply(status)
     }
@@ -83,10 +130,19 @@ final class StatusController: ObservableObject {
     /// Called when Automatic is chosen from the menu.
     func enableAutomatic() {
         mode = .automatic
+        persistMode()
+        beginAutomatic()
+    }
+
+    private func beginAutomatic() {
         candidate = nil
         applyNextImmediately = true
         startPolling()
         poll()          // react now rather than waiting a whole cycle
+    }
+
+    private func persistMode() {
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
     }
 
     /// Called when the calendar option is toggled. Asks for permission the
@@ -101,7 +157,7 @@ final class StatusController: ObservableObject {
          * while quietly doing nothing.
          */
         useCalendar = on && calendar.access == .granted
-        UserDefaults.standard.set(useCalendar, forKey: calendarKey)
+        UserDefaults.standard.set(useCalendar, forKey: Self.calendarKey)
 
         if mode == .automatic {
             applyNextImmediately = true

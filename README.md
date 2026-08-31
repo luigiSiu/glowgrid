@@ -245,6 +245,9 @@ This compiles the app, installs it to `/Applications` and launches it. A
 Bluetooth icon appears in your menu bar and macOS asks for Bluetooth
 permission once.
 
+It starts in **Automatic** mode, so once it finds the panel it is already
+following your camera and microphone. There is nothing to switch on.
+
 Install to `/Applications` before turning on "Launch at login" — macOS records
 the app's *location* in the login item, so one registered from a build
 directory breaks the moment you rebuild.
@@ -304,7 +307,8 @@ Click the menu bar icon. It shows:
 - **The five statuses.** Picking one switches to manual mode; it stays until
   you change it.
 - **Automatic** — camera in use → *meeting*, microphone in use → *busy*,
-  neither → *available*.
+  neither → *available*. **On by default**, because a status light you have to
+  remember to update is a worse version of just telling people you are busy.
 - **…and my calendar** — also show *meeting* while a calendar event is running.
   Off until you enable it, and it asks permission the first time.
 - **Brightness** — `−` / `+`. The number shown is read back from the panel
@@ -318,6 +322,16 @@ Click the menu bar icon. It shows:
 Manual and automatic are deliberately explicit modes rather than "manual wins
 for 20 minutes". A panel that reverts on its own with no visible cause feels
 haunted; one that stays where you put it does not.
+
+**Your choice of mode is remembered.** A fresh install starts in Automatic, but
+if you switch to Manual it will still be in Manual tomorrow — quietly flipping
+back to Automatic overnight would be the same invisible state change the
+explicit modes exist to avoid.
+
+One consequence worth knowing: in Automatic the app owns the status, so when it
+connects it will overwrite whatever the panel was showing, including something
+you set from the CLI. In Manual it pushes nothing until you actually pick a
+status, so a CLI-set panel is left alone.
 
 ### Why the calendar as well as the camera?
 
