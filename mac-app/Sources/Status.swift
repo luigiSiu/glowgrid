@@ -50,8 +50,12 @@ enum Status: String, CaseIterable, Identifiable {
  * Rather than a hidden timeout, the mode is explicit and visible in the menu:
  * picking a status by hand switches to .manual and stays there until the user
  * selects Automatic again. Predictable beats clever.
+ *
+ * String-backed so the choice can be written to UserDefaults. The raw values
+ * are persisted, so renaming a case would silently reset everyone's mode to
+ * the default.
  */
-enum ControlMode {
+enum ControlMode: String {
     case manual
     case automatic
 }

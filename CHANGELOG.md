@@ -10,6 +10,23 @@ Version numbers live in three places that have to agree: `Info.plist`,
 `pyproject.toml` and the git tag. See
 [Version numbers, and where they live](README.md#version-numbers-and-where-they-live).
 
+## Unreleased
+
+### Changed
+
+- **The app starts in Automatic mode.** Previously it launched in Manual
+  showing nothing, and did nothing at all until you opened the menu and chose
+  Automatic — which is the wrong default for a status light whose entire point
+  is that you do not have to remember it. Detection now begins at launch.
+- **The mode is remembered across launches.** Choosing Manual and finding the
+  app back in Automatic the next morning would be exactly the invisible state
+  change that the explicit modes exist to prevent, so the choice is persisted.
+  Only the default is new; a stored preference always wins.
+
+  A consequence worth stating: in Automatic the app owns the status, so on
+  connecting it overwrites whatever the panel was showing, including a status
+  set from the CLI. Manual still pushes nothing until you pick something.
+
 ## [0.1.0] — 2026-08-25
 
 First release. The panel has been on a desk doing its job for a few weeks; this
