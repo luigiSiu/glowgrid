@@ -9,7 +9,7 @@
 
 [project]
 name = "glowgrid"
-version = "0.1.0"
+version = "0.2.0"
 description = "An 8x8 LED panel that shows whether you can be interrupted"
 readme = "README.md"
 # 3.10 for the `X | None` syntax the CLI uses. This matches the PEP 723 block

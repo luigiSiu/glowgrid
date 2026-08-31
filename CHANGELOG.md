@@ -10,7 +10,7 @@ Version numbers live in three places that have to agree: `Info.plist`,
 `pyproject.toml` and the git tag. See
 [Version numbers, and where they live](README.md#version-numbers-and-where-they-live).
 
-## Unreleased
+## [0.2.0] — 2026-08-31
 
 ### Changed
 
@@ -103,4 +103,5 @@ is the point at which somebody else can install it without compiling anything.
 - **The Mac app has no automated tests.** It was built by hand and verified by
   watching a physical panel, which is honest but does not scale.
 
+[0.2.0]: https://github.com/luigiSiu/glowgrid/releases/tag/v0.2.0
 [0.1.0]: https://github.com/luigiSiu/glowgrid/releases/tag/v0.1.0
