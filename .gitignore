@@ -7,6 +7,14 @@ mac-cli/bin/
 # Built menu bar app. Rebuild with:
 #   cd mac-app && ./build.sh
 mac-app/build/
+
+# Written by uv whenever a command is run from the repo root, because
+# pyproject.toml makes this look like a Python project. It locks nothing: the
+# project declares no dependencies, and the tools in mac-cli/ pin their own
+# inline with PEP 723. Committing it would imply a dependency set that does not
+# exist.
+uv.lock
+.venv/
 *.bin
 *.elf
 *.map
